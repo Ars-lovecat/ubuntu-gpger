@@ -11,7 +11,7 @@ GPG 공개키를 지정한 URL에서 받아 apt 소스에 자동 등록하는 �
 ## 설치
 
 ```bash
-git clone https://github.com/<사용자명>/gpger.git ~/.local/share/gpger
+git clone https://github.com/Ars-lovecat/ubuntu-gpger.git ~/.local/share/gpger
 ~/.local/share/gpger/install.sh
 ```
 
