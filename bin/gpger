@@ -1,0 +1,267 @@
+#!/usr/bin/python3
+"""gpger: GPG 공개키를 받아 apt 등 패키지 관리자 소스에 자동 등록하는 도구."""
+
+import argparse
+import gzip
+import json
+import logging
+import logging.handlers
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+try:
+    import yaml
+except ImportError:
+    sys.exit("[gpger] PyYAML이 필요합니다: sudo apt install python3-yaml")
+
+
+SCRIPT_PATH = os.path.realpath(__file__)
+REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_PATH))
+DEFAULT_CONFIG_PATH = os.path.join(REPO_ROOT, "config", "config.default.yaml")
+
+
+def resolve_home():
+    # sudo로 실행되면 HOME이 /root로 바뀌므로, 원래 사용자의 홈을 SUDO_USER로 역추적한다.
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        try:
+            return pwd.getpwnam(sudo_user).pw_dir
+        except KeyError:
+            pass
+    return os.path.expanduser("~")
+
+
+HOME = resolve_home()
+CONFIG_DIR = os.path.join(HOME, ".config", "gpger")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yaml")
+
+
+def expand_path(path):
+    if path == "~":
+        return HOME
+    if path.startswith("~/"):
+        return os.path.join(HOME, path[2:])
+    return os.path.expandvars(path)
+
+
+def load_config():
+    if not os.path.isfile(CONFIG_PATH):
+        sys.exit(
+            f"[gpger] 설정 파일이 없습니다: {CONFIG_PATH}\n"
+            "        먼저 'gpger config'를 실행해 기본 설정을 생성해주세요."
+        )
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        payload = {
+            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+class GzipRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    def rotator(self, source, dest):
+        with open(source, "rb") as f_in, gzip.open(dest + ".gz", "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.remove(source)
+
+
+def setup_logging(cfg):
+    log_cfg = cfg.get("logging", {})
+    log_dir = expand_path(log_cfg.get("dir", "~/log"))
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "gpger.log")
+
+    max_bytes = int(log_cfg.get("max_size_mb", 100)) * 1024 * 1024
+    backup_count = int(log_cfg.get("backup_count", 5))
+    compress = bool(log_cfg.get("compress", True))
+
+    handler_cls = GzipRotatingFileHandler if compress else logging.handlers.RotatingFileHandler
+    handler = handler_cls(log_path, maxBytes=max_bytes, backupCount=backup_count)
+    handler.setFormatter(JsonFormatter())
+
+    logger = logging.getLogger("gpger")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    return logger
+
+
+def detect_arch():
+    return subprocess.run(
+        ["dpkg", "--print-architecture"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def detect_codename():
+    return subprocess.run(
+        ["lsb_release", "-cs"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def resolve_system_values(cfg):
+    system_cfg = cfg.get("system", {})
+    arch = system_cfg.get("arch", "auto")
+    codename = system_cfg.get("codename", "auto")
+    if arch == "auto":
+        arch = detect_arch()
+    if codename == "auto":
+        codename = detect_codename()
+    return arch, codename
+
+
+def download(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "gpger/1.0"})
+    with urllib.request.urlopen(req) as resp:
+        return resp.read()
+
+
+def is_armored(data):
+    return b"-----BEGIN PGP PUBLIC KEY BLOCK-----" in data[:200]
+
+
+def dearmor(data):
+    result = subprocess.run(["gpg", "--dearmor"], input=data, capture_output=True, check=True)
+    return result.stdout
+
+
+def slugify(text):
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
+
+
+def extract_uid_slug(key_bytes):
+    with tempfile.NamedTemporaryFile(suffix=".gpg") as tmp:
+        tmp.write(key_bytes)
+        tmp.flush()
+        result = subprocess.run(
+            ["gpg", "--with-colons", "--import-options", "show-only", "--import", tmp.name],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    for line in result.stdout.splitlines():
+        if line.startswith("uid:"):
+            fields = line.split(":")
+            uid_str = fields[9] if len(fields) > 9 else ""
+            name = re.split(r"[<(]", uid_str)[0].strip()
+            if name:
+                return slugify(name)
+    return None
+
+
+def confirm_overwrite(path):
+    resp = input(f"[gpger] {path} 가 이미 존재합니다. 덮어쓸까요? [y/N] ")
+    return resp.strip().lower() == "y"
+
+
+def cmd_config_edit(_args):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    if not os.path.isfile(CONFIG_PATH):
+        shutil.copy(DEFAULT_CONFIG_PATH, CONFIG_PATH)
+        print(f"[gpger] 기본 설정을 생성했습니다: {CONFIG_PATH}")
+    editor = os.environ.get("EDITOR", "nano")
+    subprocess.run([editor, CONFIG_PATH])
+
+
+def cmd_config_status(_args):
+    print(f"[gpger] 설정 파일 경로: {CONFIG_PATH}", flush=True)
+    if not os.path.isfile(CONFIG_PATH):
+        print("[gpger] 설정 파일이 없습니다. 'gpger config'로 생성하세요.", flush=True)
+        return
+    subprocess.run(["cat", CONFIG_PATH])
+
+
+def cmd_apt(args):
+    if os.geteuid() != 0:
+        sys.exit("[gpger] apt 등록에는 root 권한이 필요합니다. sudo로 실행해주세요.")
+
+    cfg = load_config()
+    logger = setup_logging(cfg)
+    apt_cfg = cfg["apt"]
+    arch, _codename = resolve_system_values(cfg)
+
+    arg_names = apt_cfg["args"]
+    if len(args.extra_args) != len(arg_names):
+        sys.exit(f"[gpger] apt는 {len(arg_names)}개의 인자({', '.join(arg_names)})가 필요합니다.")
+    named_args = dict(zip(arg_names, args.extra_args))
+
+    print(f"[gpger] {args.gpg_url} 다운로드 중...")
+    data = download(args.gpg_url)
+    if is_armored(data):
+        data = dearmor(data)
+
+    name = args.name or extract_uid_slug(data)
+    if not name:
+        sys.exit("[gpger] 키에서 이름을 추출하지 못했습니다. --name 으로 직접 지정해주세요.")
+
+    gpg_dir = expand_path(apt_cfg["paths"]["gpg_dir"])
+    source_dir = expand_path(apt_cfg["paths"]["source_dir"])
+    os.makedirs(gpg_dir, exist_ok=True)
+    os.makedirs(source_dir, exist_ok=True)
+
+    gpg_path = os.path.join(gpg_dir, f"{name}.gpg")
+    list_path = os.path.join(source_dir, f"{name}.list")
+    permission = int(str(apt_cfg["file"]["permission"]), 8)
+
+    for path in (gpg_path, list_path):
+        if os.path.exists(path) and not confirm_overwrite(path):
+            print("[gpger] 취소했습니다.")
+            logger.info(f"사용자 취소: {path}")
+            return
+
+    with open(gpg_path, "wb") as f:
+        f.write(data)
+    os.chmod(gpg_path, permission)
+
+    source_line = apt_cfg["source_template"].format(arch=arch, gpg_path=gpg_path, **named_args)
+    with open(list_path, "w", encoding="utf-8") as f:
+        f.write(source_line + "\n")
+    os.chmod(list_path, permission)
+
+    logger.info(f"등록 완료: name={name} gpg={gpg_path} list={list_path}")
+    print(f"[gpger] 완료: {gpg_path}")
+    print(f"[gpger] 완료: {list_path}")
+    print("[gpger] 이제 'sudo apt update'를 실행하세요.")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="gpger", description="GPG 키 자동 등록 도구")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    config_parser = sub.add_parser("config", help="설정 파일을 편집기로 엽니다")
+    config_sub = config_parser.add_subparsers(dest="config_command")
+    config_sub.add_parser("status", help="설정 파일 경로와 내용을 출력합니다 (편집기 없이)")
+
+    apt_parser = sub.add_parser("apt", help="GPG 키를 받아 apt 소스로 등록합니다")
+    apt_parser.add_argument("gpg_url")
+    apt_parser.add_argument("extra_args", nargs="*", help="config의 apt.args 순서대로 (예: repo suite component)")
+    apt_parser.add_argument("--name", "-n", help="파일명을 직접 지정 (미지정 시 키 UID에서 자동 추출)")
+
+    args = parser.parse_args()
+
+    if args.command == "config":
+        if args.config_command == "status":
+            cmd_config_status(args)
+        else:
+            cmd_config_edit(args)
+    elif args.command == "apt":
+        cmd_apt(args)
+
+
+if __name__ == "__main__":
+    main()

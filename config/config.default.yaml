@@ -1,0 +1,34 @@
+# gpger 기본 설정
+
+system:
+  # auto = 실행 시 자동 감지 (dpkg --print-architecture / lsb_release -cs)
+  # 특정 값을 강제하고 싶을 때만 문자열로 직접 입력하세요 (예: arm64, amd64)
+  arch: auto
+  codename: auto
+
+# 현재 지원하는 패키지 관리자 목록 (추후 확장 대비)
+package_managers:
+  - apt
+
+apt:
+  # 인자2, 3, 4... 의 이름 (위치 순서와 동일해야 함)
+  # 예: gpger apt <url> stable main  ->  suite=stable, component=main
+  args:
+    - repo
+    - suite
+    - component
+  paths:
+    gpg_dir: /etc/apt/keyrings/
+    source_dir: /etc/apt/sources.list.d/
+  # {arch}, {gpg_path} 는 자동으로 채워지고, 나머지는 위 args 이름과 매칭됩니다.
+  source_template: "deb [arch={arch} signed-by={gpg_path}] {repo} {suite} {component}"
+  file:
+    permission: "644"
+
+logging:
+  # ~ 는 실행 시 실제 홈 디렉토리로 확장됩니다 (sudo로 실행해도 원래 사용자 홈 기준)
+  dir: "~/log"
+  format: json
+  max_size_mb: 100
+  backup_count: 5
+  compress: true
