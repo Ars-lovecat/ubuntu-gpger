@@ -1,0 +1,9 @@
+Package: gpger
+Version: 0.1.0
+Section: admin
+Priority: optional
+Architecture: all
+Depends: python3, python3-yaml, gnupg
+Maintainer: Ars-lovecat <spottedcat37@gmail.com>
+Description: GPG 공개키 자동 등록 도구
+ 지정한 URL에서 GPG 공개키를 받아 apt 소스에 자동으로 등록하는 CLI 도구.
