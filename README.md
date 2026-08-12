@@ -1,12 +1,16 @@
 # gpger
 
 GPG 공개키를 지정한 URL에서 받아 apt 소스에 자동 등록하는 우분투용 커맨드.
+
 Claude Code가 만들었습니다. 문제 생기면 Claude를 탓하세요.
+
 Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 
 ## 요구사항
 
-`python3`, `python3-yaml`, `gnupg`가 필요하며, 없으면 `install.sh`가 설치 과정 중에 `[y/N]`으로 물어보고 동의하면 설치합니다 (직접 미리 설치할 필요 없음).
+`python3`, `python3-yaml`, `gnupg`가 필요합니다.
+
+없으면 `install.sh`가 설치 과정 중에 `[y/N]`으로 물어보고 동의하면 설치합니다.
 
 ## 설치 방법 두 가지
 
