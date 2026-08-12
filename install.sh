@@ -5,8 +5,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.config/gpger"
 LOG_DIR="$HOME/log"
+GPG_KEYRING_DIR="/etc/apt/keyrings"
 
 echo "[gpger] 설치를 시작합니다..."
+
+# 0. 필수 의존성 확인 및 설치
+MISSING=()
+command -v python3 >/dev/null 2>&1 || MISSING+=("python3")
+command -v gpg >/dev/null 2>&1 || MISSING+=("gnupg")
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import yaml" >/dev/null 2>&1; then
+    MISSING+=("python3-yaml")
+fi
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo "[gpger] 다음 패키지가 없습니다: ${MISSING[*]}"
+    read -r -p "[gpger] 지금 설치할까요? [y/N] " REPLY
+    if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
+        echo "[gpger] 필수 패키지가 없어 설치를 진행할 수 없습니다."
+        exit 1
+    fi
+    sudo apt-get update
+    sudo apt-get install -y "${MISSING[@]}"
+fi
 
 # 1. 실행 파일에 권한 부여
 chmod +x "$SCRIPT_DIR/bin/gpger"
@@ -46,4 +65,10 @@ if [ ! -d "$LOG_DIR" ]; then
     mkdir -p "$LOG_DIR"
 fi
 
-echo "[gpger] 설치 완료. 'gpger config' 로 설정을 확인/수정할 수 있습니다."
+# 5. apt keyrings 폴더 확인, 없으면 생성 (시스템 폴더라 sudo 필요)
+if [ ! -d "$GPG_KEYRING_DIR" ]; then
+    echo "[gpger] $GPG_KEYRING_DIR 이 없어 생성합니다."
+    sudo mkdir -p "$GPG_KEYRING_DIR"
+fi
+
+echo "[gpger] 설치 완료. 'gpger config get' 으로 설정을 확인할 수 있습니다."

@@ -5,15 +5,15 @@ system:
   # 특정 값을 강제하고 싶을 때만 문자열로 직접 입력하세요 (예: arm64, amd64)
   arch: auto
 
-# 현재 지원하는 패키지 관리자 목록 (추후 확장 대비)
-package_managers:
-  - apt
-
 apt:
-  # 인자2, 3, 4... 의 이름 (위치 순서와 동일해야 함)
+  # 인자2, 3... 의 이름 (위치 순서와 동일해야 함). 마지막 이름(component)은
+  # 뒤에 오는 값을 몇 개든 공백으로 합쳐서 받습니다 — 공식 문서에 component가
+  # 여러 개 나열돼 있어도 그대로 복사 붙여넣기 가능.
   # 예: gpger apt <url> stable main  ->  suite=stable, component=main
-  # 인자 값을 "auto"로 넣으면 실행 시 우분투 코드네임(/etc/os-release의 VERSION_CODENAME,
-  # 예: noble, jammy)으로 치환됩니다 — 도커처럼 OS 코드네임을 suite로 쓰는 저장소용.
+  # 예: gpger apt <url> jammy main restricted universe  ->  component="main restricted universe"
+  # 인자 값을 "auto"로 넣으면 실행 시 우분투 코드네임(/etc/os-release의 UBUNTU_CODENAME,
+  # 없으면 VERSION_CODENAME, 예: noble, jammy)으로 치환됩니다 — 도커처럼 OS 코드네임을
+  # suite로 쓰는 저장소용.
   # 예: gpger apt <docker키URL> https://download.docker.com/linux/ubuntu auto stable
   args:
     - repo
@@ -23,14 +23,21 @@ apt:
     gpg_dir: /etc/apt/keyrings/
     source_dir: /etc/apt/sources.list.d/
   # {arch}, {gpg_path} 는 자동으로 채워지고, 나머지는 위 args 이름과 매칭됩니다.
-  source_template: "deb [arch={arch} signed-by={gpg_path}] {repo} {suite} {component}"
+  # deb822(.sources) 형식 — 우분투 24.04 기본 형식과 동일한 방식.
+  source_template: |
+    Types: deb
+    URIs: {repo}
+    Suites: {suite}
+    Components: {component}
+    Architectures: {arch}
+    Signed-By: {gpg_path}
   file:
     permission: "644"
 
 logging:
   # ~ 는 실행 시 실제 홈 디렉토리로 확장됩니다 (sudo로 실행해도 원래 사용자 홈 기준)
+  # 로그 형식은 항상 JSON으로 고정입니다 (설정 항목 아님)
   dir: "~/log"
-  format: json
   max_size_mb: 100
   backup_count: 5
   compress: true
