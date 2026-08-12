@@ -133,6 +133,8 @@ Signed-By: /etc/apt/keyrings/docker.gpg
 
 `apt` 등록/`apt update` 결과뿐 아니라 `config get`/`set`/`reset`/`ls` 호출도 모두 기록됩니다 (조회한 키, 변경한 값 등). 이 때문에 `config` 명령들도 로그 폴더가 있어야 동작합니다.
 
+`sudo gpger apt ...`를 실행할 때마다 로그 폴더/파일 소유권을 실행한 사용자로 되돌려놓기 때문에, root가 만들었어도 이후 sudo 없이 `gpger config ...`를 실행할 때 권한 오류가 나지 않습니다.
+
 ## 필요한 폴더/파일이 없을 때
 
 `install.sh`가 필요한 폴더(설정, 로그, `/etc/apt/keyrings`)를 전부 만들어두기 때문에 정상적으로는 마주칠 일이 없지만, 나중에 폴더가 지워지는 등의 이유로 없어졌다면 gpger가 실행 중에 감지해서 `[y/N]`으로 물어봅니다. `y`면 그 자리에서 만들고 진행하고, 그 외에는 에러로 종료합니다. `install.sh`가 없앤 게 아니라 사용자가 직접 config.yaml을 건드려서 문법이 깨진 경우는 이 자동 복구 대상이 아니라 바로 에러 종료하며, `gpger config reset`으로 기본값으로 되돌려야 합니다.

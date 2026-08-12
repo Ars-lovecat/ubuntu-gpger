@@ -71,6 +71,19 @@ CONFIG_DIR = os.path.join(HOME, ".config", "gpger")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yaml")
 
 
+def chown_to_invoking_user(path):
+    # sudo로 실행 중일 때만 의미가 있다 — root가 만든 파일이 SUDO_USER 소유로
+    # 남아있어야, 나중에 sudo 없이 실행할 때 권한 오류가 안 난다.
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user or sudo_user == "root" or os.geteuid() != 0:
+        return
+    try:
+        pw = pwd.getpwnam(sudo_user)
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (KeyError, OSError):
+        pass
+
+
 def expand_path(path):
     if path == "~":
         return HOME
@@ -207,12 +220,14 @@ class GzipRotatingFileHandler(logging.handlers.RotatingFileHandler):
         with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
         os.remove(source)
+        chown_to_invoking_user(dest)
 
 
 def setup_logging(cfg):
     log_cfg = cfg.get("logging", {})
     log_dir = expand_path(log_cfg.get("dir", "~/log"))
     ensure_dir(log_dir, "로그 폴더")
+    chown_to_invoking_user(log_dir)
     log_path = os.path.join(log_dir, "gpger.log")
 
     max_bytes = int(log_cfg.get("max_size_mb", 100)) * 1024 * 1024
@@ -221,6 +236,7 @@ def setup_logging(cfg):
 
     handler_cls = GzipRotatingFileHandler if compress else logging.handlers.RotatingFileHandler
     handler = handler_cls(log_path, maxBytes=max_bytes, backupCount=backup_count)
+    chown_to_invoking_user(log_path)
     handler.setFormatter(JsonFormatter())
 
     logger = logging.getLogger("gpger")
