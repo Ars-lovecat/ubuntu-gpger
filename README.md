@@ -138,39 +138,3 @@ sudo gpger -y apt <URL> <repo> <suite> <component>
 ## 라이선스
 
 [MIT](LICENSE)
-
-
-
-## 설치 방법 두 가지
-
-설치 경로가 두 가지 있습니다.
-
-| | 직접 설치 | apt 설치 |
-|---|---|---|
-| 형태 | git clone + install.sh | .deb 패키지 |
-| 배치 위치 | `~/.local/share/gpger` + `/usr/local/bin/gpger` | `/usr/lib/gpger` + `/usr/bin/gpger` |
-| 갱신 | `git pull` | `apt upgrade` |
-
-**둘 다 같은 머신에 설치하면 `/usr/local/bin`이 PATH상 `/usr/bin`보다 먼저라 git clone 쪽이 항상 우선됩니다.**
-apt로 변경하시는 경우, `.deb`를 설치했어도 예전 `/usr/local/bin/gpger` 링크가 남아있으면 계속 그쪽이 실행되니 지워야 합니다.
-
-```bash
-sudo rm /usr/local/bin/gpger
-sudo apt install gpger
-readlink -f "$(command -v gpger)"   # /usr/lib/gpger/bin/gpger 가 나오면 정상 전환됨
-```
-
-### A. git clone (직접 설치)
-
-```bash
-git clone https://github.com/Ars-lovecat/ubuntu-gpger.git ~/.local/share/gpger
-~/.local/share/gpger/install.sh
-```
-
-설치 중 `/usr/local/bin`에 심볼릭 링크를 만들기 위해 sudo 비밀번호를 한 번 물어봅니다. 이 위치는 sudo의 `secure_path`에 포함되어 있어서, 이후로는 `gpger`와 `sudo gpger` 둘 다 별도 PATH 설정 없이 바로 동작합니다.
-
-업데이트:
-```bash
-cd ~/.local/share/gpger && git pull && ./install.sh
-```
-(`install.sh`를 다시 실행하는 이유: 링크/설정/로그 폴더가 없어졌을 경우를 대비한 재확인용이며, 기존 `config.yaml`은 덮어쓰지 않습니다.)
