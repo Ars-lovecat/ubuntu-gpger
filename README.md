@@ -1,6 +1,8 @@
 # gpger
 
 GPG 공개키를 지정한 URL에서 받아 apt 소스에 자동 등록하는 우분투용 커맨드.
+Claude Code가 만들었습니다. 문제 생기면 Claude를 탓하세요.
+Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 
 ## 요구사항
 
