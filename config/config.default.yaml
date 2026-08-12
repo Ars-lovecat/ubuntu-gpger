@@ -1,10 +1,9 @@
 # gpger 기본 설정
 
 system:
-  # auto = 실행 시 자동 감지 (dpkg --print-architecture / lsb_release -cs)
+  # auto = 실행 시 자동 감지 (dpkg --print-architecture)
   # 특정 값을 강제하고 싶을 때만 문자열로 직접 입력하세요 (예: arm64, amd64)
   arch: auto
-  codename: auto
 
 # 현재 지원하는 패키지 관리자 목록 (추후 확장 대비)
 package_managers:
