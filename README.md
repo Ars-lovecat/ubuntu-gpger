@@ -1,6 +1,7 @@
 # gpger
 
 GPG 공개키를 지정한 URL에서 받아 apt 소스에 자동 등록하는 우분투용 커맨드.
+공식 문서에 있는 외부 APT 저장소를 Ubuntu 서버에 편리하게 등록할 수 있습니다.
 
 Claude Code가 만들었습니다. 문제 생기면 Claude를 탓하세요.
 
@@ -14,49 +15,16 @@ Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 없으면 `install.sh`가 설치 과정 중에 `[y/N]`으로 물어보고 동의하면 설치합니다.
 
 
-## 설치 방법 두 가지
+## 설치 방법
 
-설치 경로가 두 가지 있습니다.
-
-| | 직접 설치 | apt 설치 |
-|---|---|---|
-| 형태 | git clone + install.sh | .deb 패키지 |
-| 배치 위치 | `~/.local/share/gpger` + `/usr/local/bin/gpger` | `/usr/lib/gpger` + `/usr/bin/gpger` |
-| 갱신 | `git pull` | `apt upgrade` |
-
-**둘 다 같은 머신에 설치하면 `/usr/local/bin`이 PATH상 `/usr/bin`보다 먼저라 git clone 쪽이 항상 우선됩니다.**
-apt로 변경하시는 경우, `.deb`를 설치했어도 예전 `/usr/local/bin/gpger` 링크가 남아있으면 계속 그쪽이 실행되니 지워야 합니다.
-
-```bash
-sudo rm /usr/local/bin/gpger
-sudo apt install gpger
-readlink -f "$(command -v gpger)"   # /usr/lib/gpger/bin/gpger 가 나오면 정상 전환됨
-```
-
-### A. git clone (직접 설치)
-
-```bash
-git clone https://github.com/Ars-lovecat/ubuntu-gpger.git ~/.local/share/gpger
-~/.local/share/gpger/install.sh
-```
-
-설치 중 `/usr/local/bin`에 심볼릭 링크를 만들기 위해 sudo 비밀번호를 한 번 물어봅니다. 이 위치는 sudo의 `secure_path`에 포함되어 있어서, 이후로는 `gpger`와 `sudo gpger` 둘 다 별도 PATH 설정 없이 바로 동작합니다.
-
-업데이트:
-```bash
-cd ~/.local/share/gpger && git pull && ./install.sh
-```
-(`install.sh`를 다시 실행하는 이유: 링크/설정/로그 폴더가 없어졌을 경우를 대비한 재확인용이며, 기존 `config.yaml`은 덮어쓰지 않습니다.)
-
-### B. apt (.deb 패키지)
-
-`packaging/deb/build.sh`로 빌드한 `.deb`를 사설 apt 저장소(aptly 등)에 올려두면, 클라이언트에서는:
+2026.08.12. 아직 배포 안 했습니다. 다운받지 마세요.
 
 ```bash
 sudo apt install gpger
 ```
 
 로 설치하고, 이후에는 `sudo apt upgrade`로 갱신합니다. 
+
 
 ## 사용법
 
@@ -73,7 +41,7 @@ gpger config set system.arch amd64
 # 설정을 기본값으로 초기화
 gpger config reset
 
-# 시스템에 등록된 apt 키링 조회 (root 불필요)
+# 시스템에 등록된 apt 키링 조회
 gpger config ls
 
 # GPG 키를 받아 apt 소스로 등록하고 apt update까지 실행 (root 권한 필요)
@@ -83,6 +51,8 @@ sudo gpger apt <공개키 URL> <repo> <suite> <component...>
 sudo gpger apt https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     https://cli.github.com/packages stable main
 ```
+
+공개키 URL, 버전 등은 각 CLI 도구의 공식 문서를 참고하세요.
 
 `component`는 하나만 오는 경우가 대부분이지만, 공식 문서에 여러 개 나열돼 있으면 그대로 이어붙여도 됩니다 (`main restricted universe`처럼 뒤에 오는 값을 전부 공백으로 합쳐서 `Components:`에 씁니다).
 
