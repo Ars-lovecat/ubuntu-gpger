@@ -18,7 +18,7 @@ Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 
 설치 경로가 두 가지 있습니다.
 
-| | 직접 설치 | apt 설치.deb 패키지 |
+| | 직접 설치 | apt 설치 |
 |---|---|---|
 | 형태 | git clone + install.sh | .deb 패키지 |
 | 배치 위치 | `~/.local/share/gpger` + `/usr/local/bin/gpger` | `/usr/lib/gpger` + `/usr/bin/gpger` |
