@@ -24,8 +24,14 @@ Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 | 배치 위치 | `~/.local/share/gpger` + `/usr/local/bin/gpger` | `/usr/lib/gpger` + `/usr/bin/gpger` |
 | 갱신 | `git pull` | `apt upgrade` |
 
-**둘 다 같은 머신에 설치하면 `/usr/local/bin`이 PATH상 `/usr/bin`보다 먼저라 git clone 쪽이 항상 우선됩니다.** 
-apt로 변경하시는 경우 `sudo rm /usr/local/bin/gpger`로 기존 버전을 지우는 걸 권장합니다.
+**둘 다 같은 머신에 설치하면 `/usr/local/bin`이 PATH상 `/usr/bin`보다 먼저라 git clone 쪽이 항상 우선됩니다.**
+apt로 변경하시는 경우, `.deb`를 설치했어도 예전 `/usr/local/bin/gpger` 링크가 남아있으면 계속 그쪽이 실행되니 지워야 합니다.
+
+```bash
+sudo rm /usr/local/bin/gpger
+sudo apt install gpger
+readlink -f "$(command -v gpger)"   # /usr/lib/gpger/bin/gpger 가 나오면 정상 전환됨
+```
 
 ### A. git clone (직접 설치)
 
@@ -97,14 +103,14 @@ sudo gpger apt https://download.docker.com/linux/ubuntu/gpg \
 
 ## config ls — 시스템 키링 현황 조회
 
-`gpger`로 등록한 것뿐 아니라 시스템에 있는 apt 관련 키링 전체를 훑어서 아래 6개 섹션(제목 밑줄로 구분)으로 분류해 보여줍니다. 분류 우선순위는 위에서부터입니다 — 즉 `/etc/apt/trusted.gpg.d/`에 있으면 무조건 "신뢰됨"이고, `ubuntu-*` 이름이라도 signed-by로 참조 중이면 "서명됨" 쪽에 남습니다. "Ubuntu OS 공개키"는 그 두 조건에 안 걸리는(=원래는 "미사용"으로 잡혔을) `ubuntu-*` 이름의 키만 따로 뺀 것입니다.
+`gpger`로 등록한 것뿐 아니라 시스템에 있는 apt 관련 키링 전체를 훑어서 아래 6개 섹션(제목 밑줄로 구분)으로 분류해 보여줍니다. 분류 우선순위는 위에서부터입니다 — 즉 `/etc/apt/trusted.gpg.d/`에 있으면 무조건 "신뢰됨"이고, `ubuntu-*` 이름이라도 signed-by로 참조 중이면 "서명됨" 쪽에 남습니다. "Ubuntu OS 공개키"는 그 두 조건에 안 걸리는(=원래는 "참조 미검출"로 잡혔을) `ubuntu-*` 이름의 키만 따로 뺀 것입니다.
 
 1. **서명됨 (/etc/apt/keyrings/)** — 이 폴더의 키링 중 `signed-by`로 참조되는 것
 2. **서명됨 (/usr/share/keyrings/)** — 위와 동일, 이 폴더 기준
 3. **서명됨 (기타 경로)** — 그 외 경로에서 `signed-by`로 참조되는 키링
 4. **신뢰됨 (/etc/apt/trusted.gpg.d, 레거시)** — `signed-by` 없이 모든 저장소에 암묵적으로 적용되는 예전 방식의 키링
 5. **Ubuntu OS 공개키** — 위 어디에도 안 걸리면서 이름이 `ubuntu-`로 시작하는 키 (우분투가 기본 설치해두는 것들)
-6. **미사용** — 나머지, 즉 참조도 안 되고 우분투 자체 키도 아닌 진짜 정리 후보
+6. **참조 미검출** — 나머지. 실제로 안 쓰는 키일 수도 있지만, 지금 `signed-by` 파서가 한 줄짜리 절대경로만 인식해서 (여러 경로 나열, fingerprint 지정, 인라인 키, continuation line 등은 놓침) "확실히 미사용"이 아니라 "이 파서로는 참조를 못 찾았다"는 뜻입니다. 삭제 전에 직접 확인하세요.
 
 각 키링 옆 괄호 안에 그 키링을 참조하는 소스 파일명이 표시되며(터미널이면 자주색), 여러 소스가 참조하면 쉼표로 나열됩니다. `.list`(`signed-by=...`)와 `.sources`(`Signed-By: ...`) 형식을 둘 다 파싱합니다. 파일 읽기만 하므로 `sudo` 없이 실행합니다.
 
@@ -141,8 +147,8 @@ sudo gpger -y apt <URL> <repo> <suite> <component>
 ## 안전장치
 
 - **다운로드**: 최초 URL과 리다이렉트된 최종 URL 모두 `https://`인지 확인(중간에 http로 다운그레이드되는 걸 방지), 응답 크기 5MB 상한.
-- **입력값 검증**: `--name`은 경로 문자 거부, `repo`/`suite`/`component`/`arch`는 개행·NUL 문자 거부(생성되는 `.sources` 파일에 몰래 필드가 끼어드는 것 방지).
-- **등록은 트랜잭션으로 처리**: 기존 `.gpg`/`.sources`를 덮어쓰기 전에 백업해두고, 이후 `apt update`가 실패하면 새로 쓴 내용을 버리고 이전 상태로 복원합니다(신규 등록이었다면 새로 만든 파일을 삭제). 즉 실패해도 기존에 잘 동작하던 저장소가 깨진 채로 남지 않습니다.
+- **입력값 검증**: `--name`은 경로 문자 거부 + 64자 제한(UID에서 자동 추출한 이름도 동일하게 64자로 자름), `repo`/`suite`/`component`/`arch`는 개행·NUL 문자 거부(생성되는 `.sources` 파일에 몰래 필드가 끼어드는 것 방지).
+- **등록은 트랜잭션으로 처리**: 기존 `.gpg`/`.sources`를 덮어쓰기 전에 백업해두고, 이후 `apt update`가 종료 코드로 실패하든 그 사이(파일 쓰기, apt 호출 등) 예외가 나든 새로 쓴 내용을 버리고 이전 상태로 복원합니다(신규 등록이었다면 새로 만든 파일을 삭제). 즉 실패해도 기존에 잘 동작하던 저장소가 깨진 채로 남지 않습니다.
 - 파일 쓰기는 임시 파일 + `os.replace()`로 원자적으로 처리합니다.
 
 ## 종료 코드

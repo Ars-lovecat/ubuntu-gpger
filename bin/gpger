@@ -44,6 +44,12 @@ def die(code, message):
     sys.exit(code)
 
 
+class AptUpdateFailed(Exception):
+    def __init__(self, returncode):
+        self.returncode = returncode
+        super().__init__(f"apt-get update exited with {returncode}")
+
+
 SCRIPT_PATH = os.path.realpath(__file__)
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_PATH))
 DEFAULT_CONFIG_PATH = os.path.join(REPO_ROOT, "config", "config.default.yaml")
@@ -322,7 +328,10 @@ def validate_template_value(key, value):
 def slugify(text):
     text = text.lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
-    return text.strip("-")
+    text = text.strip("-")
+    # --name과 동일한 최대 길이(NAME_RE)를 적용 — 비정상적으로 긴 UID가
+    # 파일시스템 이름 길이 제한을 넘겨 OSError를 내는 것을 방지한다.
+    return text[:64].rstrip("-")
 
 
 def extract_uid_slug(key_bytes):
@@ -520,7 +529,7 @@ def cmd_config_ls():
     print_section("서명됨 (기타 경로)", buckets["other"])
     print_section("신뢰됨 (/etc/apt/trusted.gpg.d, 레거시)", buckets["trusted"])
     print_section("Ubuntu OS 공개키", buckets["ubuntu"])
-    print_section("미사용", buckets["orphan"])
+    print_section("참조 미검출 (signed-by 파싱 범위 밖일 수 있음)", buckets["orphan"])
 
 
 def cmd_apt(args):
@@ -578,28 +587,43 @@ def cmd_apt(args):
             logger.info(f"사용자 취소: {path}")
             return
 
-    # 덮어쓰는 경우를 대비해 기존 파일을 백업해두고, apt update가 실패하면 되돌린다.
+    # 덮어쓰는 경우를 대비해 기존 파일을 백업해두고, 아래 블록에서 무엇이 실패하든
+    # (apt update 실패든, 그 사이의 파이썬 예외든) 이전 상태로 되돌린다.
     gpg_backup = backup_if_exists(gpg_path)
     source_backup = backup_if_exists(source_path)
 
-    source_content = apt_cfg["source_template"].format(arch=arch, gpg_path=gpg_path, **named_args)
-    write_file_atomic(gpg_path, data, permission)
-    write_file_atomic(source_path, source_content.rstrip("\n") + "\n", permission)
+    try:
+        source_content = apt_cfg["source_template"].format(arch=arch, gpg_path=gpg_path, **named_args)
+        write_file_atomic(gpg_path, data, permission)
+        write_file_atomic(source_path, source_content.rstrip("\n") + "\n", permission)
 
-    logger.info(f"등록 완료: name={name} gpg={gpg_path} source={source_path}")
-    print(f"[gpger] 완료: {gpg_path}")
-    print(f"[gpger] 완료: {source_path}")
+        logger.info(f"등록 완료: name={name} gpg={gpg_path} source={source_path}")
+        print(f"[gpger] 완료: {gpg_path}")
+        print(f"[gpger] 완료: {source_path}")
 
-    print("[gpger] apt update 실행 중...")
-    result = subprocess.run(["apt-get", "update"])
-    if result.returncode != 0:
-        logger.info(f"apt update 실패: name={name} returncode={result.returncode}, 이전 상태로 복원")
+        print("[gpger] apt update 실행 중...")
+        result = subprocess.run(["apt-get", "update"])
+        if result.returncode != 0:
+            raise AptUpdateFailed(result.returncode)
+    except AptUpdateFailed as e:
         restore_or_remove(gpg_path, gpg_backup)
         restore_or_remove(source_path, source_backup)
+        logger.info(f"apt update 실패: name={name} returncode={e.returncode}, 이전 상태로 복원")
         die(
             EXIT_APT_UPDATE,
-            f"apt update가 실패해서 등록을 취소하고 이전 상태로 복원했습니다 (종료 코드 {result.returncode}).",
+            f"apt update가 실패해서 등록을 취소하고 이전 상태로 복원했습니다 (종료 코드 {e.returncode}).",
         )
+    except KeyboardInterrupt:
+        restore_or_remove(gpg_path, gpg_backup)
+        restore_or_remove(source_path, source_backup)
+        logger.info(f"등록 중 사용자가 중단(Ctrl+C)함, 이전 상태로 복원: name={name}")
+        raise
+    except Exception as e:
+        restore_or_remove(gpg_path, gpg_backup)
+        restore_or_remove(source_path, source_backup)
+        logger.info(f"등록 중 예외 발생, 이전 상태로 복원: name={name} error={e!r}")
+        die(EXIT_FILESYSTEM, f"등록 중 오류가 발생해서 취소하고 이전 상태로 복원했습니다: {e}")
+
     cleanup_backup(gpg_backup)
     cleanup_backup(source_backup)
     logger.info(f"apt update 성공: name={name}")
