@@ -68,6 +68,13 @@ sudo gpger apt https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 sudo gpger apt <URL> stable main --name github
 ```
 
+`suite`/`component` 같은 인자 자리에 `auto`를 넣으면 실행 시 우분투 코드네임(`/etc/os-release`의 `VERSION_CODENAME`, 예: `noble`)으로 자동 치환됩니다. 도커처럼 OS 코드네임을 그대로 suite로 쓰는 저장소에 유용합니다.
+
+```bash
+sudo gpger apt https://download.docker.com/linux/ubuntu/gpg \
+    https://download.docker.com/linux/ubuntu auto stable
+```
+
 ## 로그
 
 `~/log/gpger.log`에 JSON 형식으로 기록되며, 100MB마다 최대 5개까지 gzip 압축되어 로테이션됩니다. `sudo`로 실행해도 실제 실행한 사용자의 홈 디렉토리를 기준으로 기록됩니다.

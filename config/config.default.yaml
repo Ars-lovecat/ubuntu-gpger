@@ -12,6 +12,9 @@ package_managers:
 apt:
   # 인자2, 3, 4... 의 이름 (위치 순서와 동일해야 함)
   # 예: gpger apt <url> stable main  ->  suite=stable, component=main
+  # 인자 값을 "auto"로 넣으면 실행 시 우분투 코드네임(/etc/os-release의 VERSION_CODENAME,
+  # 예: noble, jammy)으로 치환됩니다 — 도커처럼 OS 코드네임을 suite로 쓰는 저장소용.
+  # 예: gpger apt <docker키URL> https://download.docker.com/linux/ubuntu auto stable
   args:
     - repo
     - suite
