@@ -19,11 +19,22 @@ Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 
 2026.08.12. 아직 배포 안 했습니다. 다운받지 마세요.
 
+gpger 저장소 자체는 gpger로 등록할 수 없습니다 (닭과 달걀 문제 — 처음엔 gpger가 없으니까요). 그래서 최초 등록만 아래처럼 수동으로 합니다. 다른 도구들의 공식 문서에 있는 방식과 동일합니다.
+
 ```bash
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://ars-lovecat.github.io/ubuntu-gpger/gpger-key.asc | sudo gpg --dearmor -o /etc/apt/keyrings/gpger.gpg
+echo "Types: deb
+URIs: https://ars-lovecat.github.io/ubuntu-gpger
+Suites: stable
+Components: main
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/gpger.gpg" | sudo tee /etc/apt/sources.list.d/gpger.sources
+sudo apt update
 sudo apt install gpger
 ```
 
-로 설치하고, 이후에는 `sudo apt upgrade`로 갱신합니다. 
+이후부터는 `sudo apt upgrade`로 갱신합니다. (참고로 gpger가 설치된 이후에는, *다른* 저장소를 등록할 때는 이 수동 과정 대신 `sudo gpger apt ...` 한 줄로 끝납니다 — gpger 자신만 예외입니다.)
 
 
 ## 사용법

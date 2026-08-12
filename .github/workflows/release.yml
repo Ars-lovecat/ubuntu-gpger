@@ -1,0 +1,105 @@
+name: Build and publish apt repo
+
+# v로 시작하는 태그를 push하면 자동 실행됨 (예: git tag v0.3.0 && git push --tags)
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 태그에서 버전 추출 (v0.3.0 -> 0.3.0)
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 의존성 설치 (aptly)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aptly gnupg
+
+      - name: .deb 빌드
+        run: |
+          chmod +x packaging/deb/build.sh
+          ./packaging/deb/build.sh "${{ steps.version.outputs.version }}"
+
+      - name: GPG 서명 키 임포트
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: aptly 저장소 생성 및 발행
+        env:
+          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          aptly repo create -distribution="stable" -component="main" gpger-repo
+          aptly repo add gpger-repo "packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb"
+
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            aptly publish repo -architectures="amd64,arm64" \
+              -gpg-key="$GPG_FINGERPRINT" -passphrase="$GPG_PASSPHRASE" \
+              gpger-repo
+          else
+            aptly publish repo -architectures="amd64,arm64" \
+              -gpg-key="$GPG_FINGERPRINT" \
+              gpger-repo
+          fi
+
+          gpg --armor --export "$GPG_FINGERPRINT" > ~/.aptly/public/gpger-key.asc
+          touch ~/.aptly/public/.nojekyll
+
+      - name: 빌드 산출물 / pool / Packages 기록의 sha256이 전부 동일한지 확인
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DEB="packaging/deb/gpger_${VERSION}_all.deb"
+          POOL="$HOME/.aptly/public/pool/main/g/gpger/gpger_${VERSION}_all.deb"
+
+          LOCAL_SHA=$(sha256sum "$DEB" | awk '{print $1}')
+          POOL_SHA=$(sha256sum "$POOL" | awk '{print $1}')
+          echo "빌드 산출물 sha256: $LOCAL_SHA"
+          echo "pool 파일 sha256:   $POOL_SHA"
+          if [ "$LOCAL_SHA" != "$POOL_SHA" ]; then
+            echo "::error::pool의 .deb가 빌드 산출물과 다릅니다 (파이프라인 무결성 문제)"
+            exit 1
+          fi
+
+          for ARCH in amd64 arm64; do
+            PKG_FILE="$HOME/.aptly/public/dists/stable/main/binary-$ARCH/Packages"
+            RECORDED_SHA=$(awk '
+              /^Package: / { p = ($2 == "gpger") }
+              p && /^SHA256: / { print $2 }
+            ' "$PKG_FILE")
+            echo "Packages($ARCH) 기록 sha256: $RECORDED_SHA"
+            if [ "$RECORDED_SHA" != "$LOCAL_SHA" ]; then
+              echo "::error::Packages($ARCH)에 기록된 sha256이 빌드 산출물과 다릅니다"
+              exit 1
+            fi
+          done
+
+      - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb" \
+            --title "gpger ${{ github.ref_name }}" \
+            --generate-notes
+
+      - name: gh-pages 브랜치로 발행 (기존 내용을 최신 스냅샷으로 교체)
+        run: |
+          cd ~/.aptly/public
+          git init -q
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -q -B gh-pages
+          git add -A
+          git commit -q -m "저장소 발행: ${{ github.ref_name }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push --force origin gh-pages
