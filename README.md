@@ -73,7 +73,7 @@ sudo gpger apt https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 등록 후에는 자동으로 `apt update`까지 실행되고, 실패하면(예: suite/component 값이 실제 저장소와 안 맞아서 404) 어떤 파일을 확인해야 하는지 에러로 알려줍니다.
 
-파일명(키/소스 파일의 이름)은 기본적으로 GPG 키의 UID에서 자동으로 추출됩니다. 추출에 실패하거나 원하는 이름을 직접 쓰고 싶으면 `--name`을 사용하세요.
+파일명(키/소스 파일의 이름)은 기본적으로 GPG 키의 UID에서 자동으로 추출됩니다. 추출에 실패하거나 원하는 이름을 직접 쓰고 싶으면 `--name`을 사용하세요. `--name`은 영문 소문자/숫자/점/밑줄/하이픈만 허용됩니다(`/`, `..` 등 경로 문자는 거부 — 지정한 폴더 밖에 파일이 생기는 걸 막기 위함).
 
 ```bash
 sudo gpger apt <URL> stable main --name github
@@ -129,6 +129,13 @@ gpger -y config get
 sudo gpger -y apt <URL> <repo> <suite> <component>
 ```
 
+## 안전장치
+
+- **다운로드**: 최초 URL과 리다이렉트된 최종 URL 모두 `https://`인지 확인(중간에 http로 다운그레이드되는 걸 방지), 응답 크기 5MB 상한.
+- **입력값 검증**: `--name`은 경로 문자 거부, `repo`/`suite`/`component`/`arch`는 개행·NUL 문자 거부(생성되는 `.sources` 파일에 몰래 필드가 끼어드는 것 방지).
+- **등록은 트랜잭션으로 처리**: 기존 `.gpg`/`.sources`를 덮어쓰기 전에 백업해두고, 이후 `apt update`가 실패하면 새로 쓴 내용을 버리고 이전 상태로 복원합니다(신규 등록이었다면 새로 만든 파일을 삭제). 즉 실패해도 기존에 잘 동작하던 저장소가 깨진 채로 남지 않습니다.
+- 파일 쓰기는 임시 파일 + `os.replace()`로 원자적으로 처리합니다.
+
 ## 종료 코드
 
 | 코드 | 의미 |
@@ -142,3 +149,7 @@ sudo gpger -y apt <URL> <repo> <suite> <component>
 | 40 | GPG 오류 (dearmor/키 파싱 실패) |
 | 50 | 파일시스템 오류 |
 | 60 | apt update 실패 |
+
+## 라이선스
+
+[MIT](LICENSE)

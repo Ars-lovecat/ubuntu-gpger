@@ -36,6 +36,7 @@ EXIT_APT_UPDATE = 60
 
 DOWNLOAD_TIMEOUT = 15
 DOWNLOAD_RETRIES = 3
+MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # GPG 키는 원래 아주 작음, 5MB면 충분한 상한
 
 
 def die(code, message):
@@ -190,8 +191,14 @@ class JsonFormatter(logging.Formatter):
 
 
 class GzipRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    # namer가 .gz를 붙여야 doRollover()의 내부 rename 루프가 실제 파일명(.N.gz)을 찾아서
+    # 밀어낼 수 있다. namer 없이 rotator에서만 .gz를 붙이면 로테이션마다 .1.gz를 계속
+    # 덮어써서 backup_count가 무의미해진다.
+    def namer(self, default_name):
+        return default_name + ".gz"
+
     def rotator(self, source, dest):
-        with open(source, "rb") as f_in, gzip.open(dest + ".gz", "wb") as f_out:
+        with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
         os.remove(source)
 
@@ -264,7 +271,13 @@ def download(url):
     for attempt in range(1, DOWNLOAD_RETRIES + 1):
         try:
             with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
-                return resp.read()
+                # urllib은 https->http 리다이렉트도 그냥 따라가므로, 최종 URL의 스킴을 다시 확인한다.
+                if not resp.geturl().startswith("https://"):
+                    die(EXIT_NETWORK, f"리다이렉트된 최종 URL이 https://가 아닙니다: {resp.geturl()}")
+                body = resp.read(MAX_DOWNLOAD_SIZE + 1)
+                if len(body) > MAX_DOWNLOAD_SIZE:
+                    die(EXIT_NETWORK, f"다운로드 크기가 {MAX_DOWNLOAD_SIZE // (1024 * 1024)}MB 상한을 초과합니다.")
+                return body
         except urllib.error.HTTPError as e:
             if 400 <= e.code < 500:
                 die(EXIT_NETWORK, f"{url} 다운로드 실패: HTTP {e.code} (재시도해도 소용없는 오류입니다)")
@@ -286,6 +299,24 @@ def dearmor(data):
     except subprocess.CalledProcessError as e:
         die(EXIT_GPG, f"GPG 키 변환에 실패했습니다: {e.stderr.decode(errors='replace')}")
     return result.stdout
+
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def validate_name(name):
+    if not NAME_RE.fullmatch(name) or name in {".", ".."} or "/" in name or "\\" in name:
+        die(EXIT_USAGE, "--name은 영문 소문자/숫자/점/밑줄/하이픈만 사용할 수 있습니다 (경로 문자 금지).")
+    return name
+
+
+CONTROL_CHAR_RE = re.compile(r"[\r\n\x00]")
+
+
+def validate_template_value(key, value):
+    if CONTROL_CHAR_RE.search(value):
+        die(EXIT_USAGE, f"{key} 값에 개행/제어 문자가 포함될 수 없습니다.")
+    return value
 
 
 def slugify(text):
@@ -319,6 +350,35 @@ def extract_uid_slug(key_bytes):
 
 def confirm_overwrite(path):
     return confirm(f"[gpger] {path} 가 이미 존재합니다. 덮어쓸까요? [y/N] ")
+
+
+def write_file_atomic(path, data, permission):
+    tmp_path = path + ".tmp"
+    mode, kwargs = ("wb", {}) if isinstance(data, bytes) else ("w", {"encoding": "utf-8"})
+    with open(tmp_path, mode, **kwargs) as f:
+        f.write(data)
+    os.chmod(tmp_path, permission)
+    os.replace(tmp_path, path)
+
+
+def backup_if_exists(path):
+    if not os.path.exists(path):
+        return None
+    backup_path = path + ".bak"
+    shutil.copy2(path, backup_path)
+    return backup_path
+
+
+def restore_or_remove(path, backup_path):
+    if backup_path:
+        os.replace(backup_path, path)
+    elif os.path.exists(path):
+        os.remove(path)
+
+
+def cleanup_backup(backup_path):
+    if backup_path and os.path.exists(backup_path):
+        os.remove(backup_path)
 
 
 def cmd_config_get(key):
@@ -487,13 +547,19 @@ def cmd_apt(args):
     named_args = dict(zip(arg_names[:fixed_count], args.extra_args[:fixed_count]))
     named_args[arg_names[-1]] = " ".join(args.extra_args[fixed_count:])
     resolve_auto_values(named_args)
+    for key, value in named_args.items():
+        validate_template_value(key, value)
+    validate_template_value("arch", arch)
 
     print(f"[gpger] {args.gpg_url} 다운로드 중...")
     data = download(args.gpg_url)
     if is_armored(data):
         data = dearmor(data)
 
-    name = args.name or extract_uid_slug(data)
+    if args.name:
+        name = validate_name(args.name)
+    else:
+        name = extract_uid_slug(data)
     if not name:
         die(EXIT_GPG, "키에서 이름을 추출하지 못했습니다. --name 으로 직접 지정해주세요.")
 
@@ -512,14 +578,13 @@ def cmd_apt(args):
             logger.info(f"사용자 취소: {path}")
             return
 
-    with open(gpg_path, "wb") as f:
-        f.write(data)
-    os.chmod(gpg_path, permission)
+    # 덮어쓰는 경우를 대비해 기존 파일을 백업해두고, apt update가 실패하면 되돌린다.
+    gpg_backup = backup_if_exists(gpg_path)
+    source_backup = backup_if_exists(source_path)
 
     source_content = apt_cfg["source_template"].format(arch=arch, gpg_path=gpg_path, **named_args)
-    with open(source_path, "w", encoding="utf-8") as f:
-        f.write(source_content.rstrip("\n") + "\n")
-    os.chmod(source_path, permission)
+    write_file_atomic(gpg_path, data, permission)
+    write_file_atomic(source_path, source_content.rstrip("\n") + "\n", permission)
 
     logger.info(f"등록 완료: name={name} gpg={gpg_path} source={source_path}")
     print(f"[gpger] 완료: {gpg_path}")
@@ -528,11 +593,15 @@ def cmd_apt(args):
     print("[gpger] apt update 실행 중...")
     result = subprocess.run(["apt-get", "update"])
     if result.returncode != 0:
-        logger.info(f"apt update 실패: name={name} returncode={result.returncode}")
+        logger.info(f"apt update 실패: name={name} returncode={result.returncode}, 이전 상태로 복원")
+        restore_or_remove(gpg_path, gpg_backup)
+        restore_or_remove(source_path, source_backup)
         die(
             EXIT_APT_UPDATE,
-            f"apt update가 실패했습니다 (종료 코드 {result.returncode}). {source_path}의 내용을 확인해주세요.",
+            f"apt update가 실패해서 등록을 취소하고 이전 상태로 복원했습니다 (종료 코드 {result.returncode}).",
         )
+    cleanup_backup(gpg_backup)
+    cleanup_backup(source_backup)
     logger.info(f"apt update 성공: name={name}")
     print("[gpger] apt update 완료.")
 

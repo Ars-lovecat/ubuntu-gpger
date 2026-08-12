@@ -5,6 +5,7 @@ VERSION="${1:-0.1.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
 PKG_DIR="$BUILD_DIR/gpger"
 
 mkdir -p "$PKG_DIR/DEBIAN"
@@ -25,5 +26,4 @@ sed "s/^Version:.*/Version: $VERSION/" "$SCRIPT_DIR/control" > "$PKG_DIR/DEBIAN/
 OUT="$SCRIPT_DIR/gpger_${VERSION}_all.deb"
 dpkg-deb --build --root-owner-group "$PKG_DIR" "$OUT"
 
-rm -rf "$BUILD_DIR"
 echo "빌드 완료: $OUT"
