@@ -71,7 +71,7 @@ gpger config set system.arch amd64
 # 설정을 기본값으로 초기화
 gpger config reset
 
-# 시스템에 등록된 apt 키링 조회
+# 시스템 등록된 apt 키링 조회
 gpger list / gpger ls
 
 # 시스템이 등록된 apt 키링 삭제
