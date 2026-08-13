@@ -1,7 +1,7 @@
 # gpger
 
 GPG 공개키를 지정한 URL에서 받아 apt 소스에 자동 등록하는 우분투용 커맨드.
-공식 문서에 있는 외부 APT 저장소를 Ubuntu 서버에 편리하게 등록할 수 있습니다.
+공식 문서에 있는 외부 APT 저장소를 Ubuntu 서버에 편리하게 등록할 수 있습니다. 개인 사용자용.
 
 Claude Code가 만들었습니다. 문제 생기면 Claude를 탓하세요.
 
@@ -12,12 +12,8 @@ Ubuntu Server 24, 26 LTS 작동 확인했습니다.
 
 `python3`, `python3-yaml`, `gnupg`가 필요합니다.
 
-없으면 `install.sh`가 설치 과정 중에 `[y/N]`으로 물어보고 동의하면 설치합니다.
-
 
 ## 설치 방법
-
-gpger 저장소 자체는 gpger로 등록할 수 없습니다 (닭과 달걀 문제 — 처음엔 gpger가 없으니까요). 그래서 최초 등록만 아래처럼 수동으로 합니다. 다른 도구들의 공식 문서에 있는 방식과 동일합니다.
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
@@ -32,42 +28,66 @@ sudo apt update
 sudo apt install gpger
 ```
 
-이후부터는 `sudo apt upgrade`로 갱신합니다. (참고로 gpger가 설치된 이후에는, *다른* 저장소를 등록할 때는 이 수동 과정 대신 `sudo gpger apt ...` 한 줄로 끝납니다 — gpger 자신만 예외입니다.)
+## 업그레이드
 
+```bash
+sudo apt update
+sudo apt upgrade gpger
+```
 
 ## 사용법
 
+```bash
+# GPG 키를 받아 apt 소스로 등록하고 apt update까지 실행 (root 권한 필요)
+sudo gpger apt <공개키 URL> <REPO> <SUITE> <COMPONENT...> --name <NAME>
+
+# 예시)
+# 원래 버전 (Github Cli)
+(type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
+	&& sudo mkdir -p -m 755 /etc/apt/keyrings \
+	&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+	&& cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+	&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& sudo mkdir -p -m 755 /etc/apt/sources.list.d \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+	&& sudo apt update \
+	&& sudo apt install gh -y
+
+# gpger 사용 시
+sudo gpger apt https://cli.github.com/packages/githubcli-archive-keyring.gpg https://cli.github.com/packages stable main 
+```
 ```bash
 # 설정값 전체 조회
 gpger config get
 
 # 설정값 하나만 조회
+gpger config get <CONFIG>
 gpger config get apt.paths.gpg_dir
 
 # 설정값 변경 (목록, 구조체 변경 불가 / 스칼라 값만 가능)
+gpger config set <CONFIG>
 gpger config set system.arch amd64
 
 # 설정을 기본값으로 초기화
 gpger config reset
 
-# 시스템에 등록된 apt 키링 조회 (gpger ls도 동일)
-gpger list
+# 시스템에 등록된 apt 키링 조회
+gpger list / gpger ls
 
-# GPG 키를 받아 apt 소스로 등록하고 apt update까지 실행 (root 권한 필요)
-sudo gpger apt <공개키 URL> <repo> <suite> <component...>
-
-# 예시
-sudo gpger apt https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    https://cli.github.com/packages stable main
+# 시스템이 등록된 apt 키링 삭제
+sudo gpger remove <GPGKEY>
+sudo gpger remove githubcli-archive-keyring
+sudo gpger remove githubcli-archive-keyring.gpg
 ```
 
 공개키 URL, 버전 등은 각 CLI 도구의 공식 문서를 참고하세요.
 
 `component`는 하나만 오는 경우가 대부분이지만, 공식 문서에 여러 개 나열돼 있으면 그대로 이어붙여도 됩니다 (`main restricted universe`처럼 뒤에 오는 값을 전부 공백으로 합쳐서 `Components:`에 씁니다).
 
-등록 후에는 자동으로 `apt update`까지 실행되고, 실패하면(예: suite/component 값이 실제 저장소와 안 맞아서 404) 어떤 파일을 확인해야 하는지 에러로 알려줍니다.
+등록 후에는 자동으로 `apt update`까지 실행됩니다.
 
-파일명(키/소스 파일의 이름)은 기본적으로 GPG 키의 UID에서 자동으로 추출됩니다. 추출에 실패하거나 원하는 이름을 직접 쓰고 싶으면 `--name`을 사용하세요. `--name`은 영문 소문자/숫자/점/밑줄/하이픈만 허용됩니다(`/`, `..` 등 경로 문자는 거부 — 지정한 폴더 밖에 파일이 생기는 걸 막기 위함).
+파일명(키/소스 파일의 이름)은 기본적으로 GPG 키의 UID에서 자동으로 추출됩니다. 
+추출에 실패하거나 원하는 이름을 직접 쓰고 싶으면 `--name`을 사용하세요 (영문 소문자, 숫자, 점, 밑줄, 하이픈만 가능)
 
 ```bash
 sudo gpger apt <URL> stable main --name github
@@ -89,12 +109,6 @@ sudo gpger remove github
 ```
 
 `/etc/apt/keyrings/<name>.gpg`와 `/etc/apt/sources.list.d/<name>.sources` 중 존재하는 파일을 확인해서 `[y/N]`으로 물어본 뒤 삭제하고, 삭제 후 `apt update`까지 실행합니다. 삭제 자체는 확인 즉시 끝나는 동작이라, 이후 `apt update`가 (이 삭제와 무관한 다른 저장소 문제로) 실패해도 방금 지운 파일을 되살리지는 않습니다.
-
-`gpger list`에 나온 파일명을 확장자(`.gpg`/`.sources`)까지 그대로 복사-붙여넣기 해도 됩니다 — 끝에 붙은 확장자는 자동으로 떼어내고 이름만 사용합니다.
-
-```bash
-sudo gpger remove githubcli-archive-keyring.gpg
-```
 
 ## list (ls) — 시스템 키링 현황 조회
 
