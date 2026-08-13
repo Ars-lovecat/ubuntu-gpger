@@ -13,7 +13,7 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     # fingerprint는 비밀 정보가 아니라(공개키 배포용으로 원래 공개돼야 하는 값) Secrets에
-    # 등록할 필요 없이 여기 그대로 적어둔다. 실제로 비밀이어야 하는 건 GPG_PRIVATE_KEY뿐.
+    # 등록할 필요 없이 여기 그대로 적어둔다. 실제로 비밀이어야 하는 건 GPG_KEY(개인키)뿐.
     env:
       GPG_FINGERPRINT: 7DD122403D82C2CD817ECB7711282C49660F38A0
     steps:
@@ -41,7 +41,7 @@ jobs:
 
       - name: GPG 서명 키 임포트
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "${{ secrets.GPG_KEY }}" | gpg --batch --import
 
       - name: aptly 저장소 생성 및 발행
         env:
