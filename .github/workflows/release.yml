@@ -16,13 +16,17 @@ jobs:
     # 등록할 필요 없이 여기 그대로 적어둔다. 실제로 비밀이어야 하는 건 GPG_KEY(개인키)뿐.
     env:
       GPG_FINGERPRINT: 7DD122403D82C2CD817ECB7711282C49660F38A0
+      # 태그 이름을 run: 블록에 ${{ }}로 직접 문자열 치환하면, 태그에 쉘 특수문자가
+      # 들어있을 때 명령 주입 여지가 생긴다. env로 한 번 감싸서 쉘 변수로만 참조한다
+      # (태그를 밀 수 있는 사람은 이미 쓰기 권한이 있어 실제 위험은 낮지만, 방어 심층화 차원).
+      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: 체크아웃
         uses: actions/checkout@v4
 
       - name: 태그에서 버전 추출 (v0.3.0 -> 0.3.0)
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: 문법 사전 검사 (dpkg-deb --build는 패키징할 스크립트를 실행/검증하지 않음)
         run: |
@@ -35,9 +39,11 @@ jobs:
           sudo apt-get install -y aptly gnupg
 
       - name: .deb 빌드
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           chmod +x packaging/deb/build.sh
-          ./packaging/deb/build.sh "${{ steps.version.outputs.version }}"
+          ./packaging/deb/build.sh "$VERSION"
 
       - name: GPG 서명 키 임포트
         run: |
@@ -53,9 +59,10 @@ jobs:
       - name: aptly 저장소 생성 및 발행
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           aptly repo create -distribution="stable" -component="main" gpger-repo
-          aptly repo add gpger-repo "packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb"
+          aptly repo add gpger-repo "packaging/deb/gpger_${VERSION}_all.deb"
 
           if [ -n "$GPG_PASSPHRASE" ]; then
             aptly publish repo -architectures="amd64,arm64" \
@@ -71,8 +78,9 @@ jobs:
           touch ~/.aptly/public/.nojekyll
 
       - name: 빌드 산출물 / pool / Packages 기록의 sha256이 전부 동일한지 확인
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           DEB="packaging/deb/gpger_${VERSION}_all.deb"
           POOL="$HOME/.aptly/public/pool/main/g/gpger/gpger_${VERSION}_all.deb"
 
@@ -101,20 +109,22 @@ jobs:
       - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보 / 재실행 시 덮어쓰기)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="${{ github.ref_name }}"
-          DEB="packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb"
+          DEB="packaging/deb/gpger_${VERSION}_all.deb"
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG가 이미 있습니다 (재실행) — 자산만 덮어씁니다."
-            gh release upload "$TAG" "$DEB" --clobber
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME가 이미 있습니다 (재실행) — 자산만 덮어씁니다."
+            gh release upload "$TAG_NAME" "$DEB" --clobber
           else
-            gh release create "$TAG" "$DEB" \
-              --title "gpger $TAG" \
+            gh release create "$TAG_NAME" "$DEB" \
+              --title "gpger $TAG_NAME" \
               --generate-notes
           fi
 
       - name: gh-pages 브랜치로 발행 (기존 내용을 최신 스냅샷으로 교체)
+        env:
+          GITHUB_TOKEN_FOR_PUSH: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd ~/.aptly/public
           git init -q
@@ -122,6 +132,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git checkout -q -B gh-pages
           git add -A
-          git commit -q -m "저장소 발행: ${{ github.ref_name }}"
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git commit -q -m "저장소 발행: $TAG_NAME"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN_FOR_PUSH}@github.com/${{ github.repository }}.git"
           git push --force origin gh-pages
