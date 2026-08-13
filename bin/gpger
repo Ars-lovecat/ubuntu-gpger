@@ -851,6 +851,53 @@ def cmd_apt(args):
     print("[gpger] apt update 완료.")
 
 
+def cmd_apt_remove(name):
+    if os.geteuid() != 0:
+        die(EXIT_PERMISSION, "삭제에는 root 권한이 필요합니다. sudo로 실행해주세요.")
+
+    name = validate_name(name)
+    cfg = load_config()
+    logger = setup_logging(cfg)
+    apt_cfg = cfg["apt"]
+
+    gpg_dir = expand_path(apt_cfg["paths"]["gpg_dir"])
+    source_dir = expand_path(apt_cfg["paths"]["source_dir"])
+    gpg_path = os.path.join(gpg_dir, f"{name}.gpg")
+    source_path = os.path.join(source_dir, f"{name}.sources")
+
+    targets = [p for p in (gpg_path, source_path) if os.path.isfile(p)]
+    if not targets:
+        die(EXIT_FILESYSTEM, f"'{name}'로 등록된 파일을 찾을 수 없습니다: {gpg_path}, {source_path}")
+
+    print("[gpger] 다음 파일을 삭제합니다:")
+    for path in targets:
+        print(f"  - {path}")
+    if not confirm("[gpger] 계속하시겠습니까? [y/N] "):
+        print("[gpger] 삭제를 취소했습니다.")
+        logger.info(f"삭제 취소: name={name}")
+        return
+
+    for path in targets:
+        os.remove(path)
+    logger.info(f"삭제 완료: name={name} 대상={targets}")
+    print(f"[gpger] {name} 관련 파일을 삭제했습니다.")
+
+    # 삭제 자체는 이미 끝난 상태다 — apt update가 (이 삭제와 무관한 다른 저장소 문제로)
+    # 실패하더라도, 방금 지운 파일을 되살리는 롤백은 하지 않는다. 사용자가 원한 건
+    # "이 파일들을 지우는 것" 그 자체이기 때문이다.
+    print("[gpger] apt update 실행 중...")
+    result = subprocess.run(["apt-get", "update"])
+    if result.returncode != 0:
+        logger.info(f"삭제 후 apt update 실패: name={name} returncode={result.returncode}")
+        die(
+            EXIT_APT_UPDATE,
+            f"삭제는 완료됐지만 apt update가 실패했습니다 (종료 코드 {result.returncode}). "
+            "다른 저장소 설정이 깨져있을 수 있습니다.",
+        )
+    logger.info(f"삭제 후 apt update 성공: name={name}")
+    print("[gpger] apt update 완료.")
+
+
 def main():
     global AUTO_YES
 
@@ -865,6 +912,7 @@ def main():
             "  gpger config reset                   - 설정을 기본값으로 초기화\n"
             "  gpger config ls                      - 시스템 키링 현황 조회\n"
             "  sudo gpger apt <GPG_URL> <repo> <suite> <component...>\n"
+            "  sudo gpger remove <NAME>             - 등록했던 키/소스 삭제\n"
             "\n"
             "자세한 사용법과 안전장치, 종료 코드는 README.md를 참고하세요."
         ),
@@ -876,7 +924,7 @@ def main():
         help="모든 [y/N] 확인 프롬프트에 자동으로 예(y)로 응답합니다 (cron 등 비대화형 환경용). "
              "서브커맨드보다 앞에 지정하세요 (예: gpger -y apt ...).",
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{config,apt}")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{config,apt,remove}")
 
     config_parser = sub.add_parser("config", help="설정 값을 조회/변경/초기화하거나 시스템 키링 현황을 봅니다")
     config_sub = config_parser.add_subparsers(dest="config_command", required=True, metavar="{get,set,reset,ls}")
@@ -913,6 +961,14 @@ def main():
              "영문 소문자/숫자/점/밑줄/하이픈만 허용됩니다.",
     )
 
+    remove_parser = sub.add_parser(
+        "remove", help="gpger로 등록한 GPG 키/apt 소스를 삭제합니다 (root 권한 필요)"
+    )
+    remove_parser.add_argument(
+        "name", metavar="NAME",
+        help="삭제할 키/소스 파일 이름 (등록 시 쓰인 이름; 'gpger config ls'로 확인 가능)",
+    )
+
     args = parser.parse_args()
     AUTO_YES = args.yes
 
@@ -927,6 +983,8 @@ def main():
             cmd_config_ls()
     elif args.command == "apt":
         cmd_apt(args)
+    elif args.command == "remove":
+        cmd_apt_remove(args.name)
 
 
 if __name__ == "__main__":
