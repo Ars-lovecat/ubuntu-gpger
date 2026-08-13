@@ -65,9 +65,17 @@ jobs:
           aptly repo add gpger-repo "packaging/deb/gpger_${VERSION}_all.deb"
 
           if [ -n "$GPG_PASSPHRASE" ]; then
+            # -passphrase로 직접 넘기면 다른 프로세스가 ps/procfs로 커맨드라인 인자를
+            # 볼 수 있어서, 파일로 넘기는 -passphrase-file을 대신 쓴다 (러너는 매번 새
+            # 단일 사용자 VM이라 실제 위험은 낮지만, 방어 심층화 차원). 파일은 이 실행
+            # 안에서만 쓰고 바로 지운다.
+            PASSPHRASE_FILE=$(mktemp)
+            chmod 600 "$PASSPHRASE_FILE"
+            printf '%s' "$GPG_PASSPHRASE" > "$PASSPHRASE_FILE"
             aptly publish repo -architectures="amd64,arm64" \
-              -gpg-key="$GPG_FINGERPRINT" -passphrase="$GPG_PASSPHRASE" \
+              -gpg-key="$GPG_FINGERPRINT" -passphrase-file="$PASSPHRASE_FILE" \
               gpger-repo
+            rm -f "$PASSPHRASE_FILE"
           else
             aptly publish repo -architectures="amd64,arm64" \
               -gpg-key="$GPG_FINGERPRINT" \
