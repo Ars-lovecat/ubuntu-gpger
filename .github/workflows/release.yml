@@ -42,6 +42,13 @@ jobs:
       - name: GPG 서명 키 임포트
         run: |
           echo "${{ secrets.GPG_KEY }}" | gpg --batch --import
+          # CI 러너에는 실제 터미널이 없어서 pinentry가 뜨면
+          # "Inappropriate ioctl for device"로 죽는다. loopback 모드로 강제해서
+          # -passphrase로 넘긴 값을 그대로 쓰게 한다.
+          mkdir -p ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          gpgconf --kill gpg-agent
 
       - name: aptly 저장소 생성 및 발행
         env:
