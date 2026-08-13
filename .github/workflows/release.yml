@@ -20,6 +20,11 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: 문법 사전 검사 (dpkg-deb --build는 패키징할 스크립트를 실행/검증하지 않음)
+        run: |
+          python3 -m py_compile bin/gpger
+          bash -n packaging/deb/build.sh
+
       - name: 의존성 설치 (aptly)
         run: |
           sudo apt-get update
@@ -83,14 +88,21 @@ jobs:
             fi
           done
 
-      - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보)
+      - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보 / 재실행 시 덮어쓰기)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            "packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb" \
-            --title "gpger ${{ github.ref_name }}" \
-            --generate-notes
+          TAG="${{ github.ref_name }}"
+          DEB="packaging/deb/gpger_${{ steps.version.outputs.version }}_all.deb"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG가 이미 있습니다 (재실행) — 자산만 덮어씁니다."
+            gh release upload "$TAG" "$DEB" --clobber
+          else
+            gh release create "$TAG" "$DEB" \
+              --title "gpger $TAG" \
+              --generate-notes
+          fi
 
       - name: gh-pages 브랜치로 발행 (기존 내용을 최신 스냅샷으로 교체)
         run: |

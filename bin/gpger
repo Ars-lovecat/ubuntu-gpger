@@ -113,9 +113,11 @@ def chown_dir_with_consent(path, description):
     # 홈 디렉터리 안쪽이면 조용히 처리한다 (원래 사용자 소유가 되는 게 항상 맞음).
     # 홈 밖의 경로(예: /var/log, 심볼릭 링크로 밖을 가리키는 경우 포함)라면
     # 시스템 디렉터리를 건드리는 것일 수 있으니 명시적으로 확인받는다.
+    # 반환값(owner_ids 또는 None)은 호출자가 그대로 핸들러에 넘겨서, 여기서 "n"으로
+    # 거절한 결정이 이후 파일 단위 chown(핸들러의 _open/rotator)에도 그대로 반영되게 한다.
     ids = resolve_invoking_user_ids()
     if ids is None:
-        return
+        return None
     if not is_inside_home(path):
         sudo_user = os.environ.get("SUDO_USER")
         real_path = os.path.realpath(path)
@@ -123,8 +125,9 @@ def chown_dir_with_consent(path, description):
         print(f"[gpger] 이 디렉터리와 그 안의 로그 파일의 소유권을 {sudo_user}:{sudo_user}로 변경합니다.")
         if not confirm("[gpger] 계속하시겠습니까? [y/N] "):
             print(f"[gpger] {description} 소유권 변경을 건너뜁니다.")
-            return
+            return None
     quiet_chown(path, ids)
+    return ids
 
 
 def expand_path(path):
@@ -157,17 +160,20 @@ def ensure_dir(path, description):
 
 def ensure_config_dir():
     ensure_dir(CONFIG_DIR, "설정 폴더")
+    # 설정 폴더는 항상 HOME 바로 아래(~/.config/gpger)라 홈 밖으로 나갈 수 없으므로,
+    # 로그 폴더와 달리 동의를 물을 필요 없이 조용히 원래 사용자 소유로 되돌린다.
+    quiet_chown(CONFIG_DIR, resolve_invoking_user_ids())
 
 
 def ensure_config_file():
     ensure_config_dir()
-    if os.path.isfile(CONFIG_PATH):
-        return
-    print(f"[gpger] 설정 파일이 없습니다: {CONFIG_PATH}")
-    if not confirm("[gpger] 기본 설정으로 새로 만들까요? [y/N] "):
-        die(EXIT_CONFIG, "설정 파일이 없어 진행할 수 없습니다.")
-    shutil.copy(DEFAULT_CONFIG_PATH, CONFIG_PATH)
-    print(f"[gpger] 기본 설정을 생성했습니다: {CONFIG_PATH}")
+    if not os.path.isfile(CONFIG_PATH):
+        print(f"[gpger] 설정 파일이 없습니다: {CONFIG_PATH}")
+        if not confirm("[gpger] 기본 설정으로 새로 만들까요? [y/N] "):
+            die(EXIT_CONFIG, "설정 파일이 없어 진행할 수 없습니다.")
+        shutil.copy(DEFAULT_CONFIG_PATH, CONFIG_PATH)
+        print(f"[gpger] 기본 설정을 생성했습니다: {CONFIG_PATH}")
+    quiet_chown(CONFIG_PATH, resolve_invoking_user_ids())
 
 
 def load_config_raw():
@@ -192,8 +198,9 @@ def load_config():
         die(
             EXIT_CONFIG,
             "설정 파일 값이 유효하지 않습니다:\n"
-            + "\n".join(f"  - {e}" for e in errors)
-            + "\n'gpger config set <키> <값>'으로 고치거나 'gpger config reset'으로 초기화하세요.",
+            + format_validation_errors(errors)
+            + "\n깨진 값이 하나뿐이면 'gpger config set <키> <값>'으로 고칠 수 있습니다."
+            + " 여러 개가 동시에 깨졌다면 'gpger config reset'으로 초기화하세요.",
         )
     return cfg
 
@@ -204,6 +211,7 @@ def save_config(cfg):
     with open(tmp_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
     os.replace(tmp_path, CONFIG_PATH)
+    quiet_chown(CONFIG_PATH, resolve_invoking_user_ids())
 
 
 def flatten_config(d, prefix=""):
@@ -273,17 +281,19 @@ def is_valid_int(v):
 
 
 def validate_config(cfg):
+    # (dotted_key, message) 튜플로 반환한다 — 문자열로 미리 합쳐버리면 cmd_config_set()이
+    # "이번에 건드린 키에 대한 오류인지"를 구분할 수 없기 때문이다.
     errors = []
 
     def check(dotted_key, ok, expectation):
         if not ok:
             value, found = get_nested(cfg, dotted_key)
             actual = value if found else "(없음)"
-            errors.append(f"'{dotted_key}': {expectation} (실제 값: {actual!r})")
+            errors.append((dotted_key, f"{expectation} (실제 값: {actual!r})"))
 
     for key, _ in flatten_config(cfg):
         if key not in ALLOWED_CONFIG_KEYS:
-            errors.append(f"'{key}': 알 수 없는 설정 키입니다.")
+            errors.append((key, "알 수 없는 설정 키입니다."))
 
     arch, _ = get_nested(cfg, "system.arch")
     check("system.arch", is_nonempty_str(arch), "비어있지 않은 문자열이어야 함")
@@ -318,6 +328,10 @@ def validate_config(cfg):
     return errors
 
 
+def format_validation_errors(errors):
+    return "\n".join(f"  - '{key}': {msg}" for key, msg in errors)
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         payload = {
@@ -335,9 +349,18 @@ class OwnershipFixingRotatingFileHandler(logging.handlers.RotatingFileHandler):
     # 이게 root로 실행 중이면 새로 열린 파일이 root 소유로 생성된다. _open()을
     # 오버라이드해서 매번(최초 생성이든 로테이션 후 재오픈이든) 열린 파일 디스크립터를
     # 바로 fchown한다 — 경로 기반 chown보다 TOCTOU에 안전하다.
+    # owner_ids는 chown_dir_with_consent()가 돌려준 값을 그대로 받는다 — 여기서 다시
+    # resolve_invoking_user_ids()를 부르면 사용자가 디렉터리 chown을 거절("n")했다는
+    # 결정이 파일 단위 chown에는 반영되지 않는 문제가 생긴다. FileHandler.__init__()이
+    # delay=False면 내부에서 곧바로 _open()을 부르므로, super().__init__() 호출 전에
+    # self.owner_ids를 먼저 저장해둔다.
+    def __init__(self, *args, owner_ids=None, **kwargs):
+        self.owner_ids = owner_ids
+        super().__init__(*args, **kwargs)
+
     def _open(self):
         stream = super()._open()
-        quiet_fchown(stream, resolve_invoking_user_ids())
+        quiet_fchown(stream, self.owner_ids)
         return stream
 
 
@@ -352,14 +375,14 @@ class GzipRotatingFileHandler(OwnershipFixingRotatingFileHandler):
         with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
         os.remove(source)
-        quiet_chown(dest, resolve_invoking_user_ids())
+        quiet_chown(dest, self.owner_ids)
 
 
 def setup_logging(cfg):
     log_cfg = cfg.get("logging", {})
     log_dir = expand_path(log_cfg.get("dir", "~/log"))
     ensure_dir(log_dir, "로그 폴더")
-    chown_dir_with_consent(log_dir, "로그 폴더")
+    owner_ids = chown_dir_with_consent(log_dir, "로그 폴더")
     log_path = os.path.join(log_dir, "gpger.log")
 
     max_bytes = int(log_cfg.get("max_size_mb", 100)) * 1024 * 1024
@@ -369,7 +392,7 @@ def setup_logging(cfg):
     # 압축 여부와 무관하게 OwnershipFixingRotatingFileHandler 계열을 써서, 최초 생성과
     # 로테이션 후 재오픈 둘 다 자동으로 소유권이 맞춰지게 한다.
     handler_cls = GzipRotatingFileHandler if compress else OwnershipFixingRotatingFileHandler
-    handler = handler_cls(log_path, maxBytes=max_bytes, backupCount=backup_count)
+    handler = handler_cls(log_path, maxBytes=max_bytes, backupCount=backup_count, owner_ids=owner_ids)
     handler.setFormatter(JsonFormatter())
 
     logger = logging.getLogger("gpger")
@@ -377,6 +400,42 @@ def setup_logging(cfg):
     logger.handlers.clear()
     logger.addHandler(handler)
     return logger
+
+
+def validate_logging_fields(cfg):
+    # setup_logging()이 크래시 없이 돌 수 있는지만 보는 좁은 검증 — logging.* 4개
+    # 필드만 확인한다. config get/set/ls는 logging 이외의 필드가 깨져 있어도 동작해야
+    # 하므로, 전체 validate_config() 대신 이걸로 "지금 setup_logging을 불러도 되는가"만 판단한다.
+    errors = []
+    log_dir, _ = get_nested(cfg, "logging.dir")
+    if not is_nonempty_str(log_dir):
+        errors.append("logging.dir")
+    max_size, _ = get_nested(cfg, "logging.max_size_mb")
+    if not (is_valid_int(max_size) and max_size > 0):
+        errors.append("logging.max_size_mb")
+    backup_count, _ = get_nested(cfg, "logging.backup_count")
+    if not (is_valid_int(backup_count) and backup_count >= 0):
+        errors.append("logging.backup_count")
+    compress, _ = get_nested(cfg, "logging.compress")
+    if type(compress) is not bool:
+        errors.append("logging.compress")
+    return errors
+
+
+def setup_logging_safe(cfg):
+    # config get/set/ls처럼 깨진 설정에서도 동작해야 하는 명령이 쓴다. logging.* 자체가
+    # 깨져 있으면 setup_logging()이 크래시하므로, 그 경우 파일 로그 없이(NullHandler) 진행한다.
+    if validate_logging_fields(cfg):
+        print(
+            "[gpger] 경고: logging 설정값이 유효하지 않아 이번 실행은 파일 로그를 남기지 않습니다.",
+            file=sys.stderr,
+        )
+        logger = logging.getLogger("gpger")
+        logger.setLevel(logging.INFO)
+        logger.handlers.clear()
+        logger.addHandler(logging.NullHandler())
+        return logger
+    return setup_logging(cfg)
 
 
 def detect_arch():
@@ -541,8 +600,9 @@ def cleanup_backup(backup_path):
 
 def cmd_config_get(key):
     # 값이 깨진 상태에서도 조회는 항상 가능해야 하므로 검증 없는 로드를 쓴다.
+    # logging.* 자체가 깨져 있을 수도 있으니 setup_logging_safe로 크래시를 피한다.
     cfg = load_config_raw()
-    logger = setup_logging(cfg)
+    logger = setup_logging_safe(cfg)
     logger.info(f"config get: {key or '(전체)'}")
     if not key:
         for k, v in flatten_config(cfg):
@@ -555,19 +615,25 @@ def cmd_config_get(key):
 
 
 def cmd_config_set(key, value):
-    # 시작 상태가 깨져 있어도 set으로 고칠 수 있어야 하므로 검증 없는 로드로 시작한다.
-    # 다만 실제로 저장하기 전에는, 바뀐 내용을 담은 candidate 전체가 검증을 통과해야 한다 —
-    # 통과 못 하면 기존 설정 파일은 전혀 건드리지 않는다.
+    # 시작 상태가 깨져 있어도 set으로 고칠 수 있어야 하므로 검증 없는 로드로 시작하고,
+    # candidate를 만들고 검증까지 끝낸 뒤에야 setup_logging을 부른다 — 순서를 바꾸지 않으면
+    # logging.* 필드가 깨져 있을 때 그 필드를 고치려는 시도 자체가 setup_logging(cfg)에서
+    # (원본 cfg 기준으로) 크래시해버린다.
+    #
+    # 검증은 candidate 전체가 아니라 "이번에 건드린 key"에 대한 오류만 본다 — 그래야
+    # 다른 필드가 이미 깨져 있는 상태에서도 이번에 고치려는 필드 하나는 정상적으로 저장된다
+    # (전체 검증을 요구하면 여러 필드가 동시에 깨진 설정을 한 번에 하나씩 복구할 방법이 없다).
     cfg = load_config_raw()
-    logger = setup_logging(cfg)
     candidate = copy.deepcopy(cfg)
     set_nested(candidate, key, value)
-    errors = validate_config(candidate)
+    errors = [(k, m) for k, m in validate_config(candidate) if k == key]
     if errors:
         die(
             EXIT_CONFIG,
-            f"'{key}'에 그 값을 넣으면 설정이 유효하지 않아집니다:\n" + "\n".join(f"  - {e}" for e in errors),
+            f"'{key}'에 그 값을 넣으면 유효하지 않습니다:\n" + format_validation_errors(errors),
         )
+    # candidate 기준으로 로깅을 설정한다 (다른 필드가 여전히 깨져 있을 수 있으니 safe 버전).
+    logger = setup_logging_safe(candidate)
     save_config(candidate)
     logger.info(f"config set: {key} = {value}")
     print(f"[gpger] {key} = {value} 로 설정했습니다.")
@@ -650,8 +716,9 @@ def print_section(title, entries):
 
 def cmd_config_ls():
     # 시스템 키링 스캔은 apt.* 값과 무관하므로 검증 없는 로드로 충분하다.
+    # logging.* 자체가 깨져 있을 수도 있으니 setup_logging_safe로 크래시를 피한다.
     cfg = load_config_raw()
-    logger = setup_logging(cfg)
+    logger = setup_logging_safe(cfg)
     logger.info("config ls")
 
     signed_by_map = {}
@@ -787,29 +854,64 @@ def cmd_apt(args):
 def main():
     global AUTO_YES
 
-    parser = argparse.ArgumentParser(prog="gpger", description="GPG 키 자동 등록 도구")
-    parser.add_argument(
-        "-y", "--yes", action="store_true", help="확인 프롬프트에 항상 예로 응답 (비대화형 환경용, 서브커맨드 앞에 지정)"
+    parser = argparse.ArgumentParser(
+        prog="gpger",
+        description="GPG 공개키를 받아 apt 소스로 등록하는 도구. 설정 조회/변경과 시스템 키링 현황 조회도 지원합니다.",
+        epilog=(
+            "예시:\n"
+            "  gpger config get                     - 설정 전체 조회\n"
+            "  gpger config get system.arch         - 설정 값 하나만 조회\n"
+            "  gpger config set system.arch amd64   - 설정 값 변경\n"
+            "  gpger config reset                   - 설정을 기본값으로 초기화\n"
+            "  gpger config ls                      - 시스템 키링 현황 조회\n"
+            "  sudo gpger apt <GPG_URL> <repo> <suite> <component...>\n"
+            "\n"
+            "자세한 사용법과 안전장치, 종료 코드는 README.md를 참고하세요."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="모든 [y/N] 확인 프롬프트에 자동으로 예(y)로 응답합니다 (cron 등 비대화형 환경용). "
+             "서브커맨드보다 앞에 지정하세요 (예: gpger -y apt ...).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{config,apt}")
 
-    config_parser = sub.add_parser("config", help="설정 값을 조회/변경합니다")
-    config_sub = config_parser.add_subparsers(dest="config_command", required=True)
+    config_parser = sub.add_parser("config", help="설정 값을 조회/변경/초기화하거나 시스템 키링 현황을 봅니다")
+    config_sub = config_parser.add_subparsers(dest="config_command", required=True, metavar="{get,set,reset,ls}")
 
     get_parser = config_sub.add_parser("get", help="설정 값을 조회합니다 (키 생략 시 전체 출력)")
-    get_parser.add_argument("key", nargs="?")
+    get_parser.add_argument(
+        "key", nargs="?", metavar="KEY",
+        help="점(.)으로 구분된 설정 키 (예: system.arch, logging.max_size_mb). 생략하면 전체를 출력합니다.",
+    )
 
-    set_parser = config_sub.add_parser("set", help="설정 값을 변경합니다")
-    set_parser.add_argument("key")
-    set_parser.add_argument("value")
+    set_parser = config_sub.add_parser(
+        "set", help="설정 값 하나를 변경합니다 (스칼라 값만 가능, 목록/구조체 값은 불가)"
+    )
+    set_parser.add_argument("key", metavar="KEY", help="변경할 설정 키 (예: system.arch)")
+    set_parser.add_argument("value", metavar="VALUE", help="새로 넣을 값")
 
-    config_sub.add_parser("reset", help="설정을 기본값으로 초기화합니다")
-    config_sub.add_parser("ls", help="시스템에 등록된 apt 키링을 조회합니다")
+    config_sub.add_parser("reset", help="설정 파일을 기본값(config.default.yaml)으로 초기화합니다")
+    config_sub.add_parser(
+        "ls", help="시스템에 등록된 apt 키링을 훑어 서명됨/신뢰됨/미사용 등으로 분류해 보여줍니다"
+    )
 
-    apt_parser = sub.add_parser("apt", help="GPG 키를 받아 apt 소스로 등록합니다")
-    apt_parser.add_argument("gpg_url")
-    apt_parser.add_argument("extra_args", nargs="*", help="config의 apt.args 순서대로 (예: repo suite component)")
-    apt_parser.add_argument("--name", "-n", help="파일명을 직접 지정 (미지정 시 키 UID에서 자동 추출)")
+    apt_parser = sub.add_parser(
+        "apt", help="GPG 키를 받아 apt 소스로 등록하고 apt update까지 실행합니다 (root 권한 필요)"
+    )
+    apt_parser.add_argument("gpg_url", metavar="GPG_URL", help="GPG 공개키를 받을 URL (https://만 허용)")
+    apt_parser.add_argument(
+        "extra_args", nargs="*", metavar="ARG",
+        help="config의 apt.args 순서대로 넘길 값들 (기본 순서: repo suite component). "
+             "'auto'를 넣으면 실행 시 우분투 코드네임으로 자동 치환됩니다.",
+    )
+    apt_parser.add_argument(
+        "--name", "-n", metavar="NAME",
+        help="생성할 키/소스 파일 이름 (미지정 시 GPG 키 UID에서 자동 추출; 추출 실패 시 직접 지정 필요). "
+             "영문 소문자/숫자/점/밑줄/하이픈만 허용됩니다.",
+    )
 
     args = parser.parse_args()
     AUTO_YES = args.yes
