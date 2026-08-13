@@ -90,6 +90,12 @@ sudo gpger remove github
 
 `/etc/apt/keyrings/<name>.gpg`와 `/etc/apt/sources.list.d/<name>.sources` 중 존재하는 파일을 확인해서 `[y/N]`으로 물어본 뒤 삭제하고, 삭제 후 `apt update`까지 실행합니다. 삭제 자체는 확인 즉시 끝나는 동작이라, 이후 `apt update`가 (이 삭제와 무관한 다른 저장소 문제로) 실패해도 방금 지운 파일을 되살리지는 않습니다.
 
+`gpger config ls`에 나온 파일명을 확장자(`.gpg`/`.sources`)까지 그대로 복사-붙여넣기 해도 됩니다 — 끝에 붙은 확장자는 자동으로 떼어내고 이름만 사용합니다.
+
+```bash
+sudo gpger remove githubcli-archive-keyring.gpg
+```
+
 ## config ls — 시스템 키링 현황 조회
 
 `gpger`로 등록한 것뿐 아니라 시스템에 있는 apt 관련 키링 전체를 훑어서 아래 6개 섹션(제목 밑줄로 구분)으로 분류해 보여줍니다. 분류 우선순위는 위에서부터입니다 — 즉 `/etc/apt/trusted.gpg.d/`에 있으면 무조건 "신뢰됨"이고, `ubuntu-*` 이름이라도 signed-by로 참조 중이면 "서명됨" 쪽에 남습니다. "Ubuntu OS 공개키"는 그 두 조건에 안 걸리는(=원래는 "참조 미검출"로 잡혔을) `ubuntu-*` 이름의 키만 따로 뺀 것입니다.

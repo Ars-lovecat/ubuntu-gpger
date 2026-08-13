@@ -855,6 +855,14 @@ def cmd_apt_remove(name):
     if os.geteuid() != 0:
         die(EXIT_PERMISSION, "삭제에는 root 권한이 필요합니다. sudo로 실행해주세요.")
 
+    # config ls가 보여주는 파일명은 확장자가 붙어있으므로, 그대로 복사-붙여넣기 해도
+    # 되도록 흔한 확장자는 떼어낸다. gpger가 실제로 만드는 키 파일은 원본이 .asc/.key여도
+    # dearmor 후 항상 .gpg로 저장되므로, 여기서 신경 쓸 확장자는 .gpg/.sources뿐이다.
+    for suffix in (".gpg", ".sources"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+
     name = validate_name(name)
     cfg = load_config()
     logger = setup_logging(cfg)
@@ -966,7 +974,8 @@ def main():
     )
     remove_parser.add_argument(
         "name", metavar="NAME",
-        help="삭제할 키/소스 파일 이름 (등록 시 쓰인 이름; 'gpger config ls'로 확인 가능)",
+        help="삭제할 키/소스 파일 이름 ('gpger config ls'로 확인 가능; 끝에 .gpg/.sources가 "
+             "붙어있어도 자동으로 떼어내므로 그대로 복사-붙여넣기 해도 됩니다)",
     )
 
     args = parser.parse_args()
