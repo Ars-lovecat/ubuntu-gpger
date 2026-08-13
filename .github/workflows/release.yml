@@ -1,6 +1,12 @@
 name: Build and publish apt repo
 
 # v로 시작하는 태그를 push하면 자동 실행됨 (예: git tag v0.3.0 && git push --tags)
+#
+# 한 번 push해서 실제로 배포까지 성공한 v* 태그는 이후 삭제하거나 다른 커밋으로
+# 옮기지 않는다 (태그를 지웠다 새로 만들면 기존 GitHub Release가 태그 연결이 끊어져
+# draft/untagged 상태로 고아가 되는 문제가 있었다). 코드가 바뀌면 새 버전 태그를 쓴다.
+# 같은 태그를 재실행하는 경우("GitHub Release 생성" 단계 참고)는 오직 "이전과 완전히
+# 같은 바이트의 .deb를 다시 만든 경우"만 허용되고, 다르면 그 단계에서 실패한다.
 on:
   push:
     tags:
@@ -67,15 +73,16 @@ jobs:
           if [ -n "$GPG_PASSPHRASE" ]; then
             # -passphrase로 직접 넘기면 다른 프로세스가 ps/procfs로 커맨드라인 인자를
             # 볼 수 있어서, 파일로 넘기는 -passphrase-file을 대신 쓴다 (러너는 매번 새
-            # 단일 사용자 VM이라 실제 위험은 낮지만, 방어 심층화 차원). 파일은 이 실행
-            # 안에서만 쓰고 바로 지운다.
-            PASSPHRASE_FILE=$(mktemp)
+            # 단일 사용자 VM이라 실제 위험은 낮지만, 방어 심층화 차원). aptly publish가
+            # 실패하면 set -e로 바로 스크립트가 끝나 마지막 rm에 도달 못 하므로,
+            # trap으로 실패 경로까지 확실히 지운다.
+            PASSPHRASE_FILE="$(mktemp)"
+            trap 'rm -f -- "$PASSPHRASE_FILE"' EXIT
             chmod 600 "$PASSPHRASE_FILE"
             printf '%s' "$GPG_PASSPHRASE" > "$PASSPHRASE_FILE"
             aptly publish repo -architectures="amd64,arm64" \
               -gpg-key="$GPG_FINGERPRINT" -passphrase-file="$PASSPHRASE_FILE" \
               gpger-repo
-            rm -f "$PASSPHRASE_FILE"
           else
             aptly publish repo -architectures="amd64,arm64" \
               -gpg-key="$GPG_FINGERPRINT" \
@@ -114,20 +121,40 @@ jobs:
             fi
           done
 
-      - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보 / 재실행 시 덮어쓰기)
+      - name: GitHub Release 생성 (태그와 연동, .deb 첨부로 추적성 확보 / 불변성 검사)
+        # 한 번 공개한 v* 릴리스는 --clobber로 무조건 덮어쓰지 않는다. 재실행은
+        # "이전과 완전히 같은 산출물을 다시 올리는 것"만 허용하고(sha256 일치 시 no-op
+        # 성공), 다른 바이트가 나오면 같은 버전 태그 아래 다른 산출물이 섞이는 걸 막기
+        # 위해 실패시킨다 — 이 경우 코드가 바뀐 거라 새 버전 태그(v x.y.z+1)를 써야 한다.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           DEB="packaging/deb/gpger_${VERSION}_all.deb"
+          DEB_NAME="$(basename "$DEB")"
+          LOCAL_SHA=$(sha256sum "$DEB" | awk '{print $1}')
 
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Release $TAG_NAME가 이미 있습니다 (재실행) — 자산만 덮어씁니다."
-            gh release upload "$TAG_NAME" "$DEB" --clobber
-          else
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" "$DEB" \
               --title "gpger $TAG_NAME" \
               --generate-notes
+            exit 0
+          fi
+
+          EXISTING="$(mktemp)"
+          trap 'rm -f -- "$EXISTING"' EXIT
+          if gh release download "$TAG_NAME" --pattern "$DEB_NAME" --output "$EXISTING" --clobber 2>/dev/null; then
+            EXISTING_SHA=$(sha256sum "$EXISTING" | awk '{print $1}')
+            if [ "$EXISTING_SHA" = "$LOCAL_SHA" ]; then
+              echo "Release $TAG_NAME에 이미 동일한 산출물(sha256 일치)이 있습니다 — 업로드 없이 통과."
+            else
+              echo "::error::Release $TAG_NAME에 이미 있는 $DEB_NAME의 sha256이 이번 빌드와 다릅니다."
+              echo "::error::같은 버전 태그 아래 다른 산출물을 덮어쓰지 않습니다. 내용이 바뀌었다면 새 버전 태그를 쓰세요."
+              exit 1
+            fi
+          else
+            echo "Release $TAG_NAME는 있지만 $DEB_NAME 자산이 없습니다 — 업로드합니다."
+            gh release upload "$TAG_NAME" "$DEB"
           fi
 
       - name: gh-pages 브랜치로 발행 (기존 내용을 최신 스냅샷으로 교체)
