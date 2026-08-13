@@ -714,12 +714,12 @@ def print_section(title, entries):
     print()
 
 
-def cmd_config_ls():
+def cmd_list():
     # 시스템 키링 스캔은 apt.* 값과 무관하므로 검증 없는 로드로 충분하다.
     # logging.* 자체가 깨져 있을 수도 있으니 setup_logging_safe로 크래시를 피한다.
     cfg = load_config_raw()
     logger = setup_logging_safe(cfg)
-    logger.info("config ls")
+    logger.info("list")
 
     signed_by_map = {}
     for src in find_apt_source_files():
@@ -855,7 +855,7 @@ def cmd_apt_remove(name):
     if os.geteuid() != 0:
         die(EXIT_PERMISSION, "삭제에는 root 권한이 필요합니다. sudo로 실행해주세요.")
 
-    # config ls가 보여주는 파일명은 확장자가 붙어있으므로, 그대로 복사-붙여넣기 해도
+    # gpger list가 보여주는 파일명은 확장자가 붙어있으므로, 그대로 복사-붙여넣기 해도
     # 되도록 흔한 확장자는 떼어낸다. gpger가 실제로 만드는 키 파일은 원본이 .asc/.key여도
     # dearmor 후 항상 .gpg로 저장되므로, 여기서 신경 쓸 확장자는 .gpg/.sources뿐이다.
     for suffix in (".gpg", ".sources"):
@@ -918,7 +918,7 @@ def main():
             "  gpger config get system.arch         - 설정 값 하나만 조회\n"
             "  gpger config set system.arch amd64   - 설정 값 변경\n"
             "  gpger config reset                   - 설정을 기본값으로 초기화\n"
-            "  gpger config ls                      - 시스템 키링 현황 조회\n"
+            "  gpger list (= gpger ls)             - 시스템 키링 현황 조회\n"
             "  sudo gpger apt <GPG_URL> <repo> <suite> <component...>\n"
             "  sudo gpger remove <NAME>             - 등록했던 키/소스 삭제\n"
             "\n"
@@ -932,10 +932,10 @@ def main():
         help="모든 [y/N] 확인 프롬프트에 자동으로 예(y)로 응답합니다 (cron 등 비대화형 환경용). "
              "서브커맨드보다 앞에 지정하세요 (예: gpger -y apt ...).",
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{config,apt,remove}")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{config,apt,remove,list}")
 
-    config_parser = sub.add_parser("config", help="설정 값을 조회/변경/초기화하거나 시스템 키링 현황을 봅니다")
-    config_sub = config_parser.add_subparsers(dest="config_command", required=True, metavar="{get,set,reset,ls}")
+    config_parser = sub.add_parser("config", help="설정 값을 조회/변경/초기화합니다")
+    config_sub = config_parser.add_subparsers(dest="config_command", required=True, metavar="{get,set,reset}")
 
     get_parser = config_sub.add_parser("get", help="설정 값을 조회합니다 (키 생략 시 전체 출력)")
     get_parser.add_argument(
@@ -950,9 +950,6 @@ def main():
     set_parser.add_argument("value", metavar="VALUE", help="새로 넣을 값")
 
     config_sub.add_parser("reset", help="설정 파일을 기본값(config.default.yaml)으로 초기화합니다")
-    config_sub.add_parser(
-        "ls", help="시스템에 등록된 apt 키링을 훑어 서명됨/신뢰됨/미사용 등으로 분류해 보여줍니다"
-    )
 
     apt_parser = sub.add_parser(
         "apt", help="GPG 키를 받아 apt 소스로 등록하고 apt update까지 실행합니다 (root 권한 필요)"
@@ -974,8 +971,13 @@ def main():
     )
     remove_parser.add_argument(
         "name", metavar="NAME",
-        help="삭제할 키/소스 파일 이름 ('gpger config ls'로 확인 가능; 끝에 .gpg/.sources가 "
+        help="삭제할 키/소스 파일 이름 ('gpger list'로 확인 가능; 끝에 .gpg/.sources가 "
              "붙어있어도 자동으로 떼어내므로 그대로 복사-붙여넣기 해도 됩니다)",
+    )
+
+    sub.add_parser(
+        "list", aliases=["ls"],
+        help="시스템에 등록된 apt 키링을 훑어 서명됨/신뢰됨/미사용 등으로 분류해 보여줍니다",
     )
 
     args = parser.parse_args()
@@ -988,12 +990,12 @@ def main():
             cmd_config_set(args.key, args.value)
         elif args.config_command == "reset":
             cmd_config_reset()
-        elif args.config_command == "ls":
-            cmd_config_ls()
     elif args.command == "apt":
         cmd_apt(args)
     elif args.command == "remove":
         cmd_apt_remove(args.name)
+    elif args.command in ("list", "ls"):
+        cmd_list()
 
 
 if __name__ == "__main__":
