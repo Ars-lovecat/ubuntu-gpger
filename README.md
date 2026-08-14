@@ -131,6 +131,8 @@ sudo gpger remove githubcli-archive-keyring.gpg
 
 삭제 자체는 확인 즉시 끝나는 동작이라, 이후 `apt update`가 (이 삭제와 무관한 다른 저장소 문제로) 실패해도 방금 지운 파일을 되살리지는 않습니다.
 
+apt의 `Signed-By`는 여러 keyring을 나열해서 OR로 인증하는 것도 지원합니다. 그래서 지금 지우려는 keyring을 **다른** `.sources`/`.list` 파일도 참조하고 있다면(`gpger list`로 확인 가능), 그쪽 인증이 깨지지 않도록 keyring은 자동으로 삭제하지 않고 경고만 표시합니다 (`-k`/`--keyring`, `-a`/`--all` 둘 다 해당).
+
 
 ### 4) 설정 관리
 
@@ -147,7 +149,7 @@ gpger config get apt.paths.gpg_dir
 ------
 
 # 설정값 변경
-gpger config set <CONFIG>
+gpger config set <CONFIG> <VALUE>
 
 # 예시
 gpger config set system.arch amd64
