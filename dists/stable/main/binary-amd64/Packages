@@ -1,0 +1,16 @@
+Package: gpger
+Priority: optional
+Section: admin
+Maintainer: Ars-lovecat <spottedcat37@gmail.com>
+Architecture: all
+Version: 0.3.4
+Depends: python3, python3-yaml, gnupg
+Filename: pool/main/g/gpger/gpger_0.3.4_all.deb
+Size: 14402
+MD5sum: fe1d39d93e39725942859808a1fa019a
+SHA1: ccc283fb123008df8df3028ae0023f24629f2ff7
+SHA256: e33971ace23da05c61c9d677ae724a2313d490c626cb92dcb5b032ede0ef4a30
+SHA512: ace8ef7364720c7fa1c22c40668eb32124c6ee710f08e69166cb4d2f6fd812ce51cf0832a6b491cbdee739dedb2b869818bae979e112bc2ec6f3ce6a2a851d81
+Description: GPG 공개키 자동 등록 도구
+ 지정한 URL에서 GPG 공개키를 받아 apt 소스에 자동으로 등록하는 CLI 도구.
+
