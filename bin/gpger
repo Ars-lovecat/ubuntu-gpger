@@ -932,8 +932,22 @@ def cmd_apt_remove(name, mode="all"):
         logger.info(f"삭제 취소: name={matched_name}")
         return
 
-    for path in targets:
-        os.remove(path)
+    removed = []
+    try:
+        for path in targets:
+            os.remove(path)
+            removed.append(path)
+    except OSError as e:
+        logger.info(f"삭제 중 오류: name={matched_name} 삭제됨={removed} 실패={path} error={e!r}")
+        die(
+            EXIT_FILESYSTEM,
+            f"'{path}' 삭제 중 오류가 발생했습니다: {e}\n"
+            + (
+                f"이미 삭제된 파일: {', '.join(removed)} (이 파일들은 복원되지 않습니다)"
+                if removed
+                else "아직 삭제된 파일은 없습니다."
+            ),
+        )
     logger.info(f"삭제 완료: name={matched_name} 대상={targets}")
     print(f"[gpger] {matched_name} 관련 파일을 삭제했습니다.")
 
