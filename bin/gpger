@@ -851,7 +851,7 @@ def cmd_apt(args):
     print("[gpger] apt update 완료.")
 
 
-def cmd_apt_remove(name):
+def cmd_apt_remove(name, mode="all"):
     if os.geteuid() != 0:
         die(EXIT_PERMISSION, "삭제에는 root 권한이 필요합니다. sudo로 실행해주세요.")
 
@@ -871,19 +871,58 @@ def cmd_apt_remove(name):
     if "." in name:
         candidates.append(name.rsplit(".", 1)[0])
 
-    matched_name, targets = None, []
+    matched_name, existing = None, []
     for candidate in candidates:
         gpg_path = os.path.join(gpg_dir, f"{candidate}.gpg")
         source_path = os.path.join(source_dir, f"{candidate}.sources")
         found = [p for p in (gpg_path, source_path) if os.path.isfile(p)]
         if found:
-            matched_name, targets = candidate, found
+            matched_name, existing = candidate, found
             break
 
     if matched_name is None:
         expect_gpg = os.path.join(gpg_dir, f"{candidates[-1]}.gpg")
         expect_source = os.path.join(source_dir, f"{candidates[-1]}.sources")
         die(EXIT_FILESYSTEM, f"'{name}'로 등록된 파일을 찾을 수 없습니다: {expect_gpg}, {expect_source}")
+
+    gpg_path = os.path.join(gpg_dir, f"{matched_name}.gpg")
+    source_path = os.path.join(source_dir, f"{matched_name}.sources")
+
+    if mode == "keyring":
+        targets = [p for p in existing if p == gpg_path]
+        if not targets:
+            die(EXIT_FILESYSTEM, f"'{matched_name}'로 등록된 키링 파일이 없습니다: {gpg_path}")
+    elif mode == "source":
+        targets = [p for p in existing if p == source_path]
+        if not targets:
+            die(EXIT_FILESYSTEM, f"'{matched_name}'로 등록된 소스 파일이 없습니다: {source_path}")
+    else:
+        targets = existing
+
+    # apt의 Signed-By는 여러 키링을 나열해 OR로 인증하는 것도 지원하므로, 이 키링을
+    # 지금 같이 지우는 소스 말고 다른 .sources/.list 파일도 참조하고 있을 수 있다.
+    # 그런 다른 참조자가 있으면 그쪽의 인증이 깨지지 않도록 키링은 지우지 않는다.
+    # (mode="source"면 애초에 키링이 targets에 없어서 이 블록은 그냥 통과된다.)
+    if gpg_path in targets:
+        other_referrers = [
+            src
+            for src in find_apt_source_files()
+            if os.path.realpath(src) != os.path.realpath(source_path)
+            and any(
+                os.path.realpath(p) == os.path.realpath(gpg_path)
+                for p in extract_signed_by(src)
+            )
+        ]
+        if other_referrers:
+            print(f"[gpger] 경고: {gpg_path}를 다음 소스도 참조하고 있어 키링은 삭제하지 않습니다:")
+            for src in other_referrers:
+                print(f"  - {src}")
+            targets = [p for p in targets if p != gpg_path]
+
+    if not targets:
+        print(f"[gpger] {matched_name}: 삭제할 대상이 없습니다 (키링이 다른 소스가 참조 중이라 보호됐습니다).")
+        logger.info(f"삭제 건너뜀(키링 다른 소스가 참조 중): name={matched_name}")
+        return
 
     print("[gpger] 다음 파일을 삭제합니다:")
     for path in targets:
@@ -982,6 +1021,20 @@ def main():
         help="삭제할 키/소스 파일 이름 ('gpger list'로 확인 가능). 이름은 정확히 일치해야 "
              "하지만, 끝의 확장자(.gpg 등)는 없거나 달라도 되므로 그대로 복사-붙여넣기 해도 됩니다.",
     )
+    remove_mode = remove_parser.add_mutually_exclusive_group()
+    remove_mode.add_argument(
+        "-a", "--all", action="store_const", dest="remove_mode", const="all",
+        help="키링과 소스 파일을 모두 삭제합니다 (기본값)",
+    )
+    remove_mode.add_argument(
+        "-k", "--keyring", action="store_const", dest="remove_mode", const="keyring",
+        help="키링(.gpg) 파일만 삭제합니다 (소스 파일은 남겨둠)",
+    )
+    remove_mode.add_argument(
+        "-s", "--source", action="store_const", dest="remove_mode", const="source",
+        help="소스(.sources) 파일만 삭제합니다 (키링은 남겨둠)",
+    )
+    remove_parser.set_defaults(remove_mode="all")
 
     sub.add_parser(
         "list", aliases=["ls"],
@@ -1001,7 +1054,7 @@ def main():
     elif args.command == "apt":
         cmd_apt(args)
     elif args.command == "remove":
-        cmd_apt_remove(args.name)
+        cmd_apt_remove(args.name, mode=args.remove_mode)
     elif args.command in ("list", "ls"):
         cmd_list()
 
